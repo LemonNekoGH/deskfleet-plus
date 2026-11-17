@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">DeskFleet</string>
-    <string name="title_activity_main">DeskFleet</string>
-    <string name="package_name">ai.yetanother.deskfleet</string>
+    <string name="app_name">DeskFleet (KSU)</string>
+    <string name="title_activity_main">DeskFleet (KSU)</string>
+    <string name="package_name">moe.remon.deskfleet.plus</string>
     <string name="custom_url_scheme">ai.yetanother.deskfleet</string>
 </resources>

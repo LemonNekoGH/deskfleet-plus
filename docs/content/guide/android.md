@@ -65,3 +65,17 @@ To avoid starting the daemon manually after opening Termux or rebooting:
    sv-enable deskfleet
    ```
 2. With **Termux:Boot** installed, create `~/.termux/boot/deskfleet.sh` (`chmod +x`) containing `termux-wake-lock` so Termux starts its services automatically after the device unlocks following a reboot.
+
+## Unofficial: KernelSU (Root)
+
+> [!WARNING]
+> **Unofficial third-party method — strongly discouraged:**
+> - The KernelSU workflow below relies on an **unofficial third-party fork** ([`LemonNekoGH/deskfleet-plus`](https://github.com/LemonNekoGH/deskfleet-plus)) and has **no affiliation with, maintenance by, or endorsement from the official DeskFleet project or `deskfleet.org`**.
+> - This method grants **root-level privileges** inside a `chroot` environment and bypasses Android's standard application sandbox. Any Agent or terminal session launched through it runs with extremely high privileges and could read, modify, or destroy data across the device.
+> - **Make regular full backups** before attempting this on any device, and never use it on a primary device holding sensitive data. **`deskfleet.org` is not responsible for any data corruption, data loss, security compromise, or device damage caused by Agents or commands started using this method.**
+
+If you still choose to proceed entirely at your own risk on a rooted device using [KernelSU](https://kernelsu.org/):
+
+1. Install the third-party **`DeskFleet (KSU)`** APK (`moe.remon.deskfleet.plus`, separate from the official `ai.yetanother.deskfleet` app).
+2. Grant Superuser access to **DeskFleet (KSU)** in **KernelSU Manager → Superuser**.
+3. Sign in inside the app, open **Add machine → This computer**, and confirm enrollment to provision `/data/adb/deskfleet/rootfs` and the `deskfleet_daemon` KernelSU module automatically.

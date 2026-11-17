@@ -65,3 +65,17 @@ export DESKFLEET_ANDROID_SCRCPY_SERVER=/root/scrcpy-server-v3.1
    sv-enable deskfleet
    ```
 2. 安装 **Termux:Boot** 后，在 `~/.termux/boot/deskfleet.sh`（赋予 `chmod +x`）中写入 `termux-wake-lock`，手机重启解锁后即可自动在后台拉起服务。
+
+## 非官方用法：KernelSU（Root）
+
+> [!WARNING]
+> **非官方第三方方案，非常不推荐：**
+> - 下述 KernelSU 方案来自**非官方第三方 Fork**（[`LemonNekoGH/deskfleet-plus`](https://github.com/LemonNekoGH/deskfleet-plus)），**与 DeskFleet 官方项目及 `deskfleet.org` 没有任何隶属、维护或背书关系**。
+> - 这种方法绕过了 Android 应用沙箱，在 `chroot` 环境中授予了**极高的权限（Root）**。通过该方式启动的守护进程、终端及 AI Agent 拥有极高系统访问能力，可能读取、修改甚至破坏设备上的任意数据。
+> - **请务必在测试前做好定期完整备份**，切勿在存放个人隐私或重要数据的主力设备上使用。**使用这种方法启动的 Agent 或执行的命令如果造成任何数据损坏、数据丢失或设备故障，`deskfleet.org` 不对此负任何责任。**
+
+如果你在充分了解并自行承担上述全部风险后，仍决定在已安装 [KernelSU](https://kernelsu.org/) 的设备上尝试：
+
+1. 安装第三方构建的 **`DeskFleet (KSU)`** APK（包名 `moe.remon.deskfleet.plus`，与官方 `ai.yetanother.deskfleet` 应用相互独立）。
+2. 在 **KernelSU 管理器 → 超级用户** 中为 **DeskFleet (KSU)** 开启 Root 权限。
+3. 登录应用并打开 **添加机器 → 此电脑（本机）** 确认注册，应用将自动部署 `/data/adb/deskfleet/rootfs` 与 `deskfleet_daemon` KernelSU 模块。

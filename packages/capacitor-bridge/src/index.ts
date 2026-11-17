@@ -17,7 +17,10 @@ import {
 import type { OutlineAudioApi, OutlineAudioStatus } from "@deskfleet/client/outline-audio"
 import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
+import { attachAndroidLocalEnrollment as ksuDaemonEnrollment, type KsuDaemonBridgePlugin } from "./ksu-daemon.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
+
+export type { KsuDaemonBridgePlugin }
 
 export interface TelemetryBridgePlugin {
   setTelemetryConsent(options: { enabled: boolean }): Promise<{ configured: boolean }>
@@ -28,7 +31,7 @@ export interface TelemetryBridgePlugin {
   }): Promise<{ configured: boolean }>
 }
 
-export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, FilesBridgePlugin, TelemetryBridgePlugin {
+export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, FilesBridgePlugin, TelemetryBridgePlugin, KsuDaemonBridgePlugin {
   authenticate(options: { url: string; callbackScheme: string }): Promise<{ url: string }>
   getInstallSource?(): Promise<{ installerPackageName: string | null }>
   /** Android's metered status for the active network. */
@@ -71,6 +74,13 @@ export type OutlineAudioBridgePlugin = Pick<
 >
 
 export const DeskFleetBridge = registerPlugin<DeskFleetBridgeCapacitorPlugin>("DeskFleetBridge")
+
+export function attachAndroidLocalEnrollment(
+  central: CentralApi,
+  plugin: KsuDaemonBridgePlugin = DeskFleetBridge,
+): void {
+  ksuDaemonEnrollment(central, plugin)
+}
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {
   return createBrowserFiles(central, () => new CapacitorFilesEndpoint(plugin))

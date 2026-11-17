@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -24,6 +25,7 @@ import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import java.io.File
 import java.lang.ref.WeakReference
 import java.util.UUID
 
@@ -35,10 +37,67 @@ class DeskFleetBridge : Plugin() {
     private var speechInput: SpeechInput? = null
     private var nativeFiles: NativeFilesBridge? = null
     private var firebaseTelemetry: FirebaseTelemetryBridge? = null
+    private var ksuDaemon: KernelSuDaemonManager? = null
 
     private fun files(): NativeFilesBridge = nativeFiles ?: NativeFilesBridge(context).also { nativeFiles = it }
     private fun telemetry(): FirebaseTelemetryBridge =
         firebaseTelemetry ?: FirebaseTelemetryBridge(context).also { firebaseTelemetry = it }
+
+    private fun ksu(): KernelSuDaemonManager = ksuDaemon ?: run {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val versionName = packageInfo.versionName ?: "0.0.0"
+        val versionCode = packageInfo.longVersionCode.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        KernelSuDaemonManager(
+            cacheDir = File(context.cacheDir, "deskfleet-ksu"),
+            versionName = versionName,
+            versionCode = versionCode,
+            fallbackMachineName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
+        ).also { ksuDaemon = it }
+    }
+
+    @PluginMethod
+    fun ksuDaemonStatus(call: PluginCall) {
+        Thread {
+            runCatching { JSObject(ksu().status()) }
+                .fold(call::resolve) { call.reject(it.message ?: "Failed to read daemon status") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun ksuDaemonPrepareEnrollment(call: PluginCall) {
+        val serverUrl = call.getString("serverUrl")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing serverUrl")
+        val teamId = call.getString("teamId")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing teamId")
+        Thread {
+            runCatching { JSObject(ksu().prepareEnrollment(serverUrl, teamId)) }
+                .fold(call::resolve) { call.reject(it.message ?: "Failed to prepare enrollment") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun ksuDaemonEnroll(call: PluginCall) {
+        val serverUrl = call.getString("serverUrl")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing serverUrl")
+        val machineId = call.getString("machineId")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing machineId")
+        val teamId = call.getString("teamId")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing teamId")
+        val token = call.getString("token")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing token")
+        val originId = call.getString("originId")?.takeIf { it.isNotBlank() }
+            ?: return call.reject("Missing originId")
+        val credentialsJson = JSObject()
+            .put("machineId", machineId)
+            .put("teamId", teamId)
+            .put("token", token)
+            .put("originId", originId)
+            .toString()
+        Thread {
+            runCatching { JSObject(ksu().enroll(serverUrl, credentialsJson)) }
+                .fold(call::resolve) { call.reject(it.message ?: "Failed to enroll daemon") }
+        }.start()
+    }
 
     @PluginMethod
     fun setTelemetryConsent(call: PluginCall) {
