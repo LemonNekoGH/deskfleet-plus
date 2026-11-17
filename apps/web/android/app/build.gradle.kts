@@ -70,7 +70,7 @@ android {
     ndkVersion = resolvedNdkVersion
 
     defaultConfig {
-        applicationId = "ai.yetanother.deskfleet"
+        applicationId = "moe.remon.deskfleet.plus"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: defaultVersionCode
