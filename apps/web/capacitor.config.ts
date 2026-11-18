@@ -14,7 +14,7 @@ const signingType = env.ANDROID_SIGNING_TYPE === "apksigner"
 
 const config: CapacitorConfig = {
   appId: "moe.remon.deskfleet.plus",
-  appName: "DeskFleet (KSU)",
+  appName: "DeskFleet Plus",
   webDir: "dist",
   server: serverURL
     ? {

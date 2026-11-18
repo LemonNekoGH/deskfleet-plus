@@ -5,9 +5,11 @@ import { join } from "node:path"
 import test from "node:test"
 import {
   buildAndroidViewerEnv,
+  extractDebMember,
   findNdkRoot,
   MIN_ANDROID_API,
   MIN_NDK_MAJOR,
+  patchCStringInPlace,
   verifyElfLoadAlignment,
 } from "./build-android-viewer.ts"
 
@@ -87,4 +89,42 @@ test("verifyElfLoadAlignment accepts 16 KB segments and rejects 4 KB segments", 
       ),
     /0x1000.*16 KB/,
   )
+})
+
+test("patchCStringInPlace replaces exact null-terminated strings without shifting length", () => {
+  const input = Buffer.concat([
+    Buffer.from("prefix\0"),
+    Buffer.from("/data/data/com.termux/files/usr/lib\0"),
+    Buffer.from("/data/data/com.termux/files/usr/libexec/proot/loader\0"),
+  ])
+  const patched = patchCStringInPlace(input, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
+  assert.equal(patched.length, input.length)
+  assert.ok(patched.includes(Buffer.from("$ORIGIN\0")))
+  // Longer paths sharing the prefix must remain untouched.
+  assert.ok(patched.includes(Buffer.from("/data/data/com.termux/files/usr/libexec/proot/loader\0")))
+  assert.throws(() => patchCStringInPlace(input, "short", "way-too-long"), /does not fit/)
+  assert.throws(() => patchCStringInPlace(input, "missing", "x"), /was not found/)
+})
+
+test("extractDebMember extracts a member from an ar archive with even padding", () => {
+  function arEntry(name: string, payload: Buffer): Buffer {
+    const header = Buffer.alloc(60, 0x20)
+    header.write(`${name}/`, 0, "ascii")
+    header.write("0", 16, "ascii")
+    header.write("0", 28, "ascii")
+    header.write("0", 34, "ascii")
+    header.write("100644", 40, "ascii")
+    header.write(String(payload.length), 48, "ascii")
+    header.write("`\n", 58, "ascii")
+    return payload.length % 2 === 1 ? Buffer.concat([header, payload, Buffer.from("\n")]) : Buffer.concat([header, payload])
+  }
+  const deb = Buffer.concat([
+    Buffer.from("!<arch>\n"),
+    arEntry("debian-binary", Buffer.from("2.0\n")),
+    arEntry("odd", Buffer.from("abc")),
+    arEntry("data.tar.xz", Buffer.from("xz-bytes")),
+  ])
+  assert.deepEqual(extractDebMember(deb, "data.tar.xz"), Buffer.from("xz-bytes"))
+  assert.deepEqual(extractDebMember(deb, "odd"), Buffer.from("abc"))
+  assert.throws(() => extractDebMember(deb, "missing"), /missing/)
 })

@@ -37,28 +37,28 @@ class DeskFleetBridge : Plugin() {
     private var speechInput: SpeechInput? = null
     private var nativeFiles: NativeFilesBridge? = null
     private var firebaseTelemetry: FirebaseTelemetryBridge? = null
-    private var ksuDaemon: KernelSuDaemonManager? = null
+    private var prootDaemon: ProotDaemonManager? = null
 
     private fun files(): NativeFilesBridge = nativeFiles ?: NativeFilesBridge(context).also { nativeFiles = it }
     private fun telemetry(): FirebaseTelemetryBridge =
         firebaseTelemetry ?: FirebaseTelemetryBridge(context).also { firebaseTelemetry = it }
 
-    private fun ksu(): KernelSuDaemonManager = ksuDaemon ?: run {
+    private fun daemon(): ProotDaemonManager = prootDaemon ?: run {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         val versionName = packageInfo.versionName ?: "0.0.0"
-        val versionCode = packageInfo.longVersionCode.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        KernelSuDaemonManager(
-            cacheDir = File(context.cacheDir, "deskfleet-ksu"),
+        ProotDaemonManager(
+            filesDir = context.filesDir,
+            cacheDir = File(context.cacheDir, "deskfleet-proot"),
+            nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
             versionName = versionName,
-            versionCode = versionCode,
             fallbackMachineName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
-        ).also { ksuDaemon = it }
+        ).also { prootDaemon = it }
     }
 
     @PluginMethod
     fun ksuDaemonStatus(call: PluginCall) {
         Thread {
-            runCatching { JSObject(ksu().status()) }
+            runCatching { JSObject(daemon().status()) }
                 .fold(call::resolve) { call.reject(it.message ?: "Failed to read daemon status") }
         }.start()
     }
@@ -70,8 +70,13 @@ class DeskFleetBridge : Plugin() {
         val teamId = call.getString("teamId")?.takeIf { it.isNotBlank() }
             ?: return call.reject("Missing teamId")
         Thread {
-            runCatching { JSObject(ksu().prepareEnrollment(serverUrl, teamId)) }
-                .fold(call::resolve) { call.reject(it.message ?: "Failed to prepare enrollment") }
+            runCatching {
+                JSObject(
+                    daemon().prepareEnrollment(serverUrl, teamId) {
+                        LocalDaemonService.start(context)
+                    },
+                )
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to prepare enrollment") }
         }.start()
     }
 
@@ -94,7 +99,7 @@ class DeskFleetBridge : Plugin() {
             .put("originId", originId)
             .toString()
         Thread {
-            runCatching { JSObject(ksu().enroll(serverUrl, credentialsJson)) }
+            runCatching { JSObject(daemon().enroll(serverUrl, credentialsJson)) }
                 .fold(call::resolve) { call.reject(it.message ?: "Failed to enroll daemon") }
         }.start()
     }
