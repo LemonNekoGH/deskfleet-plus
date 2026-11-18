@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
-import { attachAndroidLocalEnrollment, type KsuDaemonBridgePlugin, type PreparedEnrollment } from "./ksu-daemon.ts"
+import { attachAndroidLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
 
 function createFakeCentral(initialServerUrl = "https://fleet.example"): {
   central: CentralApi
@@ -40,10 +40,10 @@ test("attachAndroidLocalEnrollment exposes localEnrollment status from native pl
     machineName: "Pixel 9 Pro",
     registrations: [createEnrollment({ configured: true, connected: true, serverUrl: "https://fleet.example", teamId: "team-1", machineId: "m-1" })],
   }
-  const plugin: KsuDaemonBridgePlugin = {
-    async ksuDaemonStatus() { return expected },
-    async ksuDaemonPrepareEnrollment() { throw new Error("unexpected prepare") },
-    async ksuDaemonEnroll() { throw new Error("unexpected enroll") },
+  const plugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() { return expected },
+    async localDaemonPrepareEnrollment() { throw new Error("unexpected prepare") },
+    async localDaemonEnroll() { throw new Error("unexpected enroll") },
   }
 
   attachAndroidLocalEnrollment(central, plugin)
@@ -62,13 +62,13 @@ test("enrollLocal short-circuits when an active registration already exists for 
     machineId: "m-1",
   })
   let prepared = false
-  const plugin: KsuDaemonBridgePlugin = {
-    async ksuDaemonStatus() { return { machineName: "Pixel 9 Pro", registrations: [existing] } },
-    async ksuDaemonPrepareEnrollment() {
+  const plugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() { return { machineName: "Pixel 9 Pro", registrations: [existing] } },
+    async localDaemonPrepareEnrollment() {
       prepared = true
       throw new Error("should not prepare")
     },
-    async ksuDaemonEnroll() { throw new Error("should not enroll") },
+    async localDaemonEnroll() { throw new Error("should not enroll") },
   }
 
   attachAndroidLocalEnrollment(central, plugin)
@@ -89,21 +89,21 @@ test("enrollLocal prepares daemon, registers with central, trims machine name, a
   })
   const prepareCalls: unknown[] = []
   const enrollCalls: unknown[] = []
-  const plugin: KsuDaemonBridgePlugin = {
-    async ksuDaemonStatus() {
+  const plugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() {
       return {
         machineName: "Pixel 9 Pro",
         registrations: [createEnrollment({ configured: true, revoked: true, serverUrl: "https://fleet.example", teamId: "team-1" })],
       }
     },
-    async ksuDaemonPrepareEnrollment(options): Promise<PreparedEnrollment> {
+    async localDaemonPrepareEnrollment(options): Promise<PreparedEnrollment> {
       prepareCalls.push(options)
       return {
         ...createEnrollment(),
         identityToken: "id-token-xyz",
       }
     },
-    async ksuDaemonEnroll(options) {
+    async localDaemonEnroll(options) {
       enrollCalls.push(options)
       return enrolledRecord
     },
@@ -133,19 +133,19 @@ test("enrollLocal prepares daemon, registers with central, trims machine name, a
 
 test("enrollLocal falls back to daemon machineName on blank input and propagates errors", async () => {
   const { central, calls } = createFakeCentral()
-  const plugin: KsuDaemonBridgePlugin = {
-    async ksuDaemonStatus() { return { machineName: "Fallback Phone", registrations: [] } },
-    async ksuDaemonPrepareEnrollment() {
+  const plugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() { return { machineName: "Fallback Phone", registrations: [] } },
+    async localDaemonPrepareEnrollment() {
       return { ...createEnrollment({ machineName: "Fallback Phone" }), identityToken: "tok" }
     },
-    async ksuDaemonEnroll() {
-      throw new Error("chroot enroll failed")
+    async localDaemonEnroll() {
+      throw new Error("container enroll failed")
     },
   }
 
   attachAndroidLocalEnrollment(central, plugin)
   await assert.rejects(() => central.enrollLocal!("team-1", 123 as unknown as string), /Invalid machine name/)
-  await assert.rejects(() => central.enrollLocal!("team-1", "   "), /chroot enroll failed/)
+  await assert.rejects(() => central.enrollLocal!("team-1", "   "), /container enroll failed/)
   assert.deepEqual(calls[0]?.payload, {
     name: "Fallback Phone",
     originId: "origin-1",

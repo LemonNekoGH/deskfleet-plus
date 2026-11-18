@@ -17,7 +17,7 @@ import {
 import type { OutlineAudioApi, OutlineAudioStatus } from "@deskfleet/client/outline-audio"
 import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
-import { attachAndroidLocalEnrollment as ksuDaemonEnrollment, type KsuDaemonBridgePlugin } from "./ksu-daemon.ts"
+import { attachAndroidLocalEnrollment as localDaemonEnrollment, type LocalDaemonBridgePlugin } from "./local-daemon.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
 export {
   ANDROID_TASK_NOTIFICATION_CHANNEL_ID,
@@ -29,7 +29,7 @@ export {
   type PushNotificationTarget,
 } from "./push-notifications.ts"
 
-export type { KsuDaemonBridgePlugin }
+export type { LocalDaemonBridgePlugin }
 
 export interface TelemetryBridgePlugin {
   setTelemetryConsent(options: { enabled: boolean }): Promise<{ configured: boolean }>
@@ -40,7 +40,7 @@ export interface TelemetryBridgePlugin {
   }): Promise<{ configured: boolean }>
 }
 
-export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, FilesBridgePlugin, TelemetryBridgePlugin, KsuDaemonBridgePlugin {
+export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, FilesBridgePlugin, TelemetryBridgePlugin, LocalDaemonBridgePlugin {
   authenticate(options: { url: string; callbackScheme: string }): Promise<{ url: string }>
   getInstallSource?(): Promise<{ installerPackageName: string | null }>
   /** Android's metered status for the active network. */
@@ -86,9 +86,9 @@ export const DeskFleetBridge = registerPlugin<DeskFleetBridgeCapacitorPlugin>("D
 
 export function attachAndroidLocalEnrollment(
   central: CentralApi,
-  plugin: KsuDaemonBridgePlugin = DeskFleetBridge,
+  plugin: LocalDaemonBridgePlugin = DeskFleetBridge,
 ): void {
-  ksuDaemonEnrollment(central, plugin)
+  localDaemonEnrollment(central, plugin)
 }
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {
