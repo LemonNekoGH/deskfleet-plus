@@ -1,11 +1,36 @@
 import { execFileSync } from "node:child_process"
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { createHash } from "node:crypto"
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
 
 export const MIN_ANDROID_API = 34
 export const MIN_NDK_MAJOR = 28
 const PAGE_SIZE_16KB = 0x4000
+
+export interface TermuxPackageSpec {
+  readonly name: string
+  readonly url: string
+  readonly sha256: string
+}
+
+export const TERMUX_PROOT_PACKAGES: readonly TermuxPackageSpec[] = [
+  {
+    name: "proot",
+    url: "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.102_aarch64.deb",
+    sha256: "10a394b585c2fc2b2c8502544f4e5f1be581dc8bfff79e8ba62f16207423e030",
+  },
+  {
+    name: "libtalloc",
+    url: "https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb",
+    sha256: "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
+  },
+  {
+    name: "libandroid-shmem",
+    url: "https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+    sha256: "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+  },
+]
 
 export interface NdkRevision {
   path: string
@@ -119,6 +144,127 @@ export function verifyElfLoadAlignment(readelfOutput: string, soPath: string): v
   }
 }
 
+/** Extract an entry from an ar (.deb) archive without shelling out to platform-specific ar/tar tools. */
+export function extractDebMember(debBuffer: Buffer, memberName: string): Buffer {
+  const magic = "!<arch>\n"
+  if (debBuffer.subarray(0, magic.length).toString("ascii") !== magic) {
+    throw new Error("Invalid deb archive: missing ar magic header")
+  }
+  let offset = magic.length
+  while (offset + 60 <= debBuffer.length) {
+    const header = debBuffer.subarray(offset, offset + 60)
+    if (header.subarray(58, 60).toString("ascii") !== "`\n") {
+      throw new Error(`Invalid ar member header at offset ${offset}`)
+    }
+    const rawName = header.subarray(0, 16).toString("ascii").trim()
+    const name = rawName.endsWith("/") ? rawName.slice(0, -1) : rawName
+    const size = Number.parseInt(header.subarray(48, 58).toString("ascii").trim(), 10)
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error(`Invalid ar member size for ${name}`)
+    }
+    const dataStart = offset + 60
+    const dataEnd = dataStart + size
+    if (dataEnd > debBuffer.length) {
+      throw new Error(`Truncated ar member ${name}`)
+    }
+    if (name === memberName) {
+      return Buffer.from(debBuffer.subarray(dataStart, dataEnd))
+    }
+    offset = dataEnd + (size % 2)
+  }
+  throw new Error(`Deb archive is missing ${memberName}`)
+}
+
+/** Replace a null-terminated ELF string in place and zero-pad the remainder so offsets never shift. */
+export function patchCStringInPlace(buffer: Buffer, from: string, to: string): Buffer {
+  const needle = Buffer.from(`${from}\0`, "utf8")
+  const replacement = Buffer.from(to, "utf8")
+  if (replacement.length >= needle.length) {
+    throw new Error(`Replacement "${to}" does not fit in "${from}"`)
+  }
+  const patched = Buffer.from(buffer)
+  let count = 0
+  let index = 0
+  while ((index = patched.indexOf(needle, index)) !== -1) {
+    replacement.copy(patched, index)
+    patched.fill(0, index + replacement.length, index + needle.length)
+    count += 1
+    index += needle.length
+  }
+  if (count === 0) {
+    throw new Error(`Expected ELF string "${from}" was not found`)
+  }
+  return patched
+}
+
+export async function stageTermuxProotBinaries(
+  outDir: string,
+  readelfBin: string,
+  packages: readonly TermuxPackageSpec[] = TERMUX_PROOT_PACKAGES,
+): Promise<string[]> {
+  mkdirSync(outDir, { recursive: true })
+  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-proot-"))
+  try {
+    const extractedDirs = new Map<string, string>()
+    for (const pkg of packages) {
+      const response = await fetch(pkg.url)
+      if (!response.ok) {
+        throw new Error(`Failed to download ${pkg.url}: HTTP ${response.status}`)
+      }
+      const debBuffer = Buffer.from(await response.arrayBuffer())
+      const digest = createHash("sha256").update(debBuffer).digest("hex")
+      if (digest !== pkg.sha256) {
+        throw new Error(`SHA-256 mismatch for ${pkg.name}: expected ${pkg.sha256}, got ${digest}`)
+      }
+      const dataTarXz = extractDebMember(debBuffer, "data.tar.xz")
+      const archivePath = join(tempRoot, `${pkg.name}-data.tar.xz`)
+      const extractDir = join(tempRoot, pkg.name)
+      mkdirSync(extractDir, { recursive: true })
+      writeFileSync(archivePath, dataTarXz)
+      execFileSync("tar", ["-xf", archivePath, "-C", extractDir], { stdio: "inherit" })
+      extractedDirs.set(pkg.name, extractDir)
+    }
+
+    const termuxPrefix = "data/data/com.termux/files/usr"
+    const prootRoot = extractedDirs.get("proot")!
+    const tallocRoot = extractedDirs.get("libtalloc")!
+    const shmemRoot = extractedDirs.get("libandroid-shmem")!
+
+    let prootBin = readFileSync(join(prootRoot, termuxPrefix, "bin/proot"))
+    prootBin = patchCStringInPlace(prootBin, "libtalloc.so.2", "libtalloc.so")
+    prootBin = patchCStringInPlace(prootBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
+
+    const loaderBin = readFileSync(join(prootRoot, termuxPrefix, "libexec/proot/loader"))
+
+    let tallocBin = readFileSync(join(tallocRoot, termuxPrefix, "lib/libtalloc.so.2.5.0"))
+    tallocBin = patchCStringInPlace(tallocBin, "libtalloc.so.2", "libtalloc.so")
+    tallocBin = patchCStringInPlace(tallocBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
+
+    let shmemBin = readFileSync(join(shmemRoot, termuxPrefix, "lib/libandroid-shmem.so"))
+    shmemBin = patchCStringInPlace(shmemBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
+    shmemBin = patchCStringInPlace(shmemBin, "/data/data/com.termux/files/usr/tmp/ashv_key_%d", "./ashv_key_%d")
+
+    const staged: string[] = []
+    const files: readonly [string, Buffer, number][] = [
+      ["libproot.so", prootBin, 0o755],
+      ["libproot_loader.so", loaderBin, 0o755],
+      ["libtalloc.so", tallocBin, 0o644],
+      ["libandroid-shmem.so", shmemBin, 0o644],
+    ]
+    for (const [filename, content, mode] of files) {
+      const targetPath = join(outDir, filename)
+      writeFileSync(targetPath, content)
+      chmodSync(targetPath, mode)
+      const readelfOutput = execFileSync(readelfBin, ["-l", targetPath], { encoding: "utf8" })
+      verifyElfLoadAlignment(readelfOutput, targetPath)
+      staged.push(targetPath)
+    }
+    return staged
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
 if (import.meta.main) {
   if (process.env.CAPACITOR_PLATFORM_NAME && process.env.CAPACITOR_PLATFORM_NAME !== "android") {
     process.exit(0)
@@ -148,13 +294,15 @@ if (import.meta.main) {
     },
   )
 
+  const readelfBin = join(binDir, `llvm-readelf${exeExt}`)
   const builtSo = join(repoRoot, "target/aarch64-linux-android", release ? "release" : "debug", "libdeskfleet_desktop_viewer.so")
-  const readelfOutput = execFileSync(join(binDir, `llvm-readelf${exeExt}`), ["-l", builtSo], { encoding: "utf8" })
+  const readelfOutput = execFileSync(readelfBin, ["-l", builtSo], { encoding: "utf8" })
   verifyElfLoadAlignment(readelfOutput, builtSo)
 
   const outDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/jniLibs/arm64-v8a")
   mkdirSync(outDir, { recursive: true })
   const targetSo = join(outDir, "libdeskfleet_desktop_viewer.so")
   copyFileSync(builtSo, targetSo)
-  console.log(`Staged ${targetSo} (NDK ${basename(ndkRoot)}, API ${MIN_ANDROID_API}, 16 KB aligned)`)
+  const prootFiles = await stageTermuxProotBinaries(outDir, readelfBin)
+  console.log(`Staged ${targetSo} and ${prootFiles.length} proot binaries (NDK ${basename(ndkRoot)}, API ${MIN_ANDROID_API}, 16 KB aligned)`)
 }

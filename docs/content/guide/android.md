@@ -66,16 +66,13 @@ To avoid starting the daemon manually after opening Termux or rebooting:
    ```
 2. With **Termux:Boot** installed, create `~/.termux/boot/deskfleet.sh` (`chmod +x`) containing `termux-wake-lock` so Termux starts its services automatically after the device unlocks following a reboot.
 
-## Unofficial: KernelSU (Root)
+## Unofficial: Embedded container (`DeskFleet Plus`)
 
-> [!WARNING]
-> **Unofficial third-party method — strongly discouraged:**
-> - The KernelSU workflow below relies on an **unofficial third-party fork** ([`LemonNekoGH/deskfleet-plus`](https://github.com/LemonNekoGH/deskfleet-plus)) and has **no affiliation with, maintenance by, or endorsement from the official DeskFleet project or `deskfleet.org`**.
-> - This method grants **root-level privileges** inside a `chroot` environment and bypasses Android's standard application sandbox. Any Agent or terminal session launched through it runs with extremely high privileges and could read, modify, or destroy data across the device.
-> - **Make regular full backups** before attempting this on any device, and never use it on a primary device holding sensitive data. **`deskfleet.org` is not responsible for any data corruption, data loss, security compromise, or device damage caused by Agents or commands started using this method.**
+> [!NOTE]
+> **Unofficial third-party distribution:**
+> - [`LemonNekoGH/deskfleet-plus`](https://github.com/LemonNekoGH/deskfleet-plus) (`DeskFleet Plus`, package `moe.remon.deskfleet.plus`) is an **unofficial third-party fork** and has **no affiliation with, maintenance by, or endorsement from the official DeskFleet project or `deskfleet.org`**.
+> - It bundles Termux's unprivileged `proot` runtime inside the app sandbox so you do not need root access or a separate Termux installation. Review third-party binaries and keep backups of important workspace data; `deskfleet.org` is not responsible for issues caused by third-party builds.
 
-If you still choose to proceed entirely at your own risk on a rooted device using [KernelSU](https://kernelsu.org/):
-
-1. Install the third-party **`DeskFleet (KSU)`** APK (`moe.remon.deskfleet.plus`, separate from the official `ai.yetanother.deskfleet` app).
-2. Grant Superuser access to **DeskFleet (KSU)** in **KernelSU Manager → Superuser**.
-3. Sign in inside the app, open **Add machine → This computer**, and confirm enrollment to provision `/data/adb/deskfleet/rootfs` and the `deskfleet_daemon` KernelSU module automatically.
+1. Install the third-party **`DeskFleet Plus`** APK (`moe.remon.deskfleet.plus`, separate from the official `ai.yetanother.deskfleet` app).
+2. Sign in inside the app, open **Add machine → This computer**, and confirm enrollment.
+3. The app automatically provisions an Ubuntu `arm64` `proot` container inside its private sandbox, downloads `deskfleet-daemon`, runs it in a foreground service with wake lock, and enrolls the device with your Team without root or manual CLI steps.
