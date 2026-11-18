@@ -181,33 +181,44 @@ internal class ProotDaemonManager(
 
         val shellBin = File(rootfsDir, "bin/sh")
         if (!shellBin.exists()) {
+            rootfsDir.deleteRecursively()
+            rootfsDir.mkdirs()
             val rootfsTar = File(cacheDir, "ubuntu-rootfs.tar")
             try {
-                downloader.download(UBUNTU_ROOTFS_URL, rootfsTar, gunzip = true)
-                val tarArgs = listOf(
-                    "--no-same-owner",
-                    "--exclude=dev/*",
-                    "-xf",
-                    rootfsTar.absolutePath,
-                    "-C",
-                    rootfsDir.absolutePath,
-                )
+                downloadUbuntuRootfs(rootfsTar)
                 val prootExtract = runner.run(
                     ProotInvocation(
                         executable = File(nativeLibraryDir, "libproot.so").absolutePath,
-                        args = listOf("--link2symlink", "-0", "-w", "/", "/system/bin/tar") + tarArgs,
+                        args = listOf(
+                            "--link2symlink",
+                            "-0",
+                            "-w",
+                            "/",
+                            "/system/bin/tar",
+                            "--no-same-owner",
+                            "--exclude=dev",
+                            "-xf",
+                            rootfsTar.absolutePath,
+                            "-C",
+                            rootfsDir.absolutePath,
+                        ),
                         env = prootBaseEnv(nativeLibraryDir, baseDir),
                     ),
                 )
-                if (prootExtract.exitCode != 0 || !shellBin.exists()) {
+                if (!shellBin.exists()) {
                     val directExtract = runner.run(
                         ProotInvocation(
                             executable = "/system/bin/tar",
-                            args = tarArgs,
+                            args = listOf(
+                                "-xf",
+                                rootfsTar.absolutePath,
+                                "-C",
+                                rootfsDir.absolutePath,
+                            ),
                             env = emptyMap(),
                         ),
                     )
-                    if (directExtract.exitCode != 0 || !shellBin.exists()) {
+                    if (!shellBin.exists()) {
                         val detail = directExtract.stderr.trim()
                             .ifEmpty { prootExtract.stderr.trim() }
                             .ifEmpty { "exit code ${directExtract.exitCode}" }
@@ -283,8 +294,15 @@ internal class ProotDaemonManager(
         val etcDir = File(rootfsDir, "etc").apply { mkdirs() }
         val resolv = File(etcDir, "resolv.conf")
         if (!resolv.isFile || resolv.length() == 0L) {
+            resolv.delete()
             resolv.writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n", Charsets.UTF_8)
         }
+    }
+
+    private fun downloadUbuntuRootfs(destination: File) {
+        val primary = runCatching { downloader.download(UBUNTU_ROOTFS_URL, destination, gunzip = true) }
+        if (primary.isSuccess) return
+        downloader.download(UBUNTU_ROOTFS_FALLBACK_URL, destination, gunzip = true)
     }
 
     private fun downloadDaemonRelease(destination: File) {
@@ -325,7 +343,8 @@ internal class ProotDaemonManager(
     }
 
     companion object {
-        const val UBUNTU_ROOTFS_URL = "https://partner-images.canonical.com/core/noble/current/ubuntu-noble-core-cloudimg-arm64-root.tar.gz"
+        const val UBUNTU_ROOTFS_URL = "https://partner-images.canonical.com/oci/noble/current/ubuntu-noble-oci-arm64-root.tar.gz"
+        const val UBUNTU_ROOTFS_FALLBACK_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
         const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"
 
         internal fun prootBaseEnv(nativeLibraryDir: File, baseDir: File): Map<String, String> = mapOf(
