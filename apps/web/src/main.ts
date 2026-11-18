@@ -24,7 +24,7 @@ import { listenForNativeResume } from "./native-resume.ts"
 import "virtual:uno.css"
 
 initializeErrorReporting("web")
-const configuredServerUrl = import.meta.env.VITE_DESKFLEET_SERVER_URL ?? (import.meta.env.DEV ? "http://localhost:8080" : location.origin)
+const configuredServerUrl = import.meta.env.VITE_DESKFLEET_SERVER_URL ?? (import.meta.env.DEV ? "http://localhost:8080" : Capacitor.isNativePlatform() ? "https://deskfleet.yetanother.ai" : location.origin)
 const adapter = await browserClient(configuredServerUrl, captureCentralRequestError, {
   ...capacitorClientOptions(configuredServerUrl),
   ...(Capacitor.isNativePlatform() ? { createFiles: createCapacitorFilesApi } : {}),
