@@ -40,6 +40,8 @@ class ProotDaemonManagerTest {
         assertTrue(invocation.args.contains(File(baseDir, "rootfs").absolutePath))
         assertTrue(invocation.args.contains("${File(baseDir, "data").absolutePath}:/var/lib/deskfleet"))
         assertTrue(invocation.args.contains("DESKFLEET_DAEMON_DIRECTORY=/var/lib/deskfleet"))
+        assertTrue(invocation.args.contains("DESKFLEET_ANDROID_SCRCPY_SERVER=/opt/deskfleet/scrcpy-server.jar"))
+        assertTrue(invocation.args.contains("DESKFLEET_ANDROID_SCRCPY_VERSION=3.1"))
         assertEquals(
             listOf("/opt/deskfleet/deskfleet-daemon", "--port", "8081"),
             invocation.args.takeLast(3),
@@ -109,6 +111,7 @@ class ProotDaemonManagerTest {
         File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
         File(rootfs, "opt/deskfleet").mkdirs()
         File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
+        File(rootfs, "opt/deskfleet/scrcpy-server.jar").writeText("jar")
         File(baseDir, "version").writeText("0.18.2")
 
         var serviceStarts = 0
