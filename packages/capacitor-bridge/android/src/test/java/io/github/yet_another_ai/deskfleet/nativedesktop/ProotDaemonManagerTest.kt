@@ -6,6 +6,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.Paths
 
 class ProotDaemonManagerTest {
     private val tempDir = Files.createTempDirectory("deskfleet-proot-test").toFile()
@@ -153,5 +154,74 @@ class ProotDaemonManagerTest {
         )
         assertEquals(1, serviceStarts)
         assertEquals("id-tok", prepared.getString("identityToken"))
+    }
+
+    @Test
+    fun ensureProvisionedFallsBackWhenPrimaryRootfsFailsAndReplacesDanglingResolvSymlink() {
+        val baseDir = File(filesDir, "linux")
+        val rootfs = File(baseDir, "rootfs")
+        val downloadedUrls = mutableListOf<String>()
+        val commands = mutableListOf<List<String>>()
+
+        val manager = ProotDaemonManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            nativeLibraryDir = nativeDir,
+            versionName = "0.18.2",
+            fallbackMachineName = "Phone",
+            runner = object : ProotRunner {
+                override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+                    commands += invocation.args
+                    return when {
+                        invocation.args.contains("/system/bin/tar") -> {
+                            File(rootfs, "bin").mkdirs()
+                            File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
+                            File(rootfs, "etc").mkdirs()
+                            val resolvPath = File(rootfs, "etc/resolv.conf").toPath()
+                            runCatching {
+                                Files.createSymbolicLink(
+                                    resolvPath,
+                                    Paths.get("../run/systemd/resolve/stub-resolv.conf"),
+                                )
+                            }
+                            ShellResult(1, "", "tar: dev/null: Operation not permitted")
+                        }
+                        invocation.args.any { it.contains("deskfleet-linux-arm64.tar.gz") } -> {
+                            File(rootfs, "opt/deskfleet").mkdirs()
+                            File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
+                            ShellResult(0, "", "")
+                        }
+                        else -> ShellResult(0, "", "")
+                    }
+                }
+            },
+            downloader = object : AssetDownloader {
+                override fun download(url: String, destination: File, gunzip: Boolean) {
+                    downloadedUrls += url
+                    if (url == ProotDaemonManager.UBUNTU_ROOTFS_URL) {
+                        throw IllegalStateException("Download failed (404) for $url")
+                    }
+                    destination.parentFile?.mkdirs()
+                    destination.writeText("mock-archive")
+                }
+            },
+        )
+
+        manager.ensureProvisioned()
+
+        assertEquals(
+            listOf(
+                ProotDaemonManager.UBUNTU_ROOTFS_URL,
+                ProotDaemonManager.UBUNTU_ROOTFS_FALLBACK_URL,
+                "https://github.com/yet-another-ai/deskfleet/releases/download/v0.18.2/deskfleet-linux-arm64.tar.gz",
+                ProotDaemonManager.SCRCPY_SERVER_URL,
+            ),
+            downloadedUrls,
+        )
+        assertFalse(commands.any { it.firstOrNull() == "-xf" })
+        val resolvFile = File(rootfs, "etc/resolv.conf")
+        assertFalse(Files.isSymbolicLink(resolvFile.toPath()))
+        assertTrue(resolvFile.isFile)
+        assertEquals("nameserver 1.1.1.1\nnameserver 8.8.8.8\n", resolvFile.readText())
     }
 }
