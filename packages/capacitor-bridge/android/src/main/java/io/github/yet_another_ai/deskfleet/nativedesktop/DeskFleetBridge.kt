@@ -56,7 +56,7 @@ class DeskFleetBridge : Plugin() {
     }
 
     @PluginMethod
-    fun ksuDaemonStatus(call: PluginCall) {
+    fun localDaemonStatus(call: PluginCall) {
         Thread {
             runCatching { JSObject(daemon().status()) }
                 .fold(call::resolve) { call.reject(it.message ?: "Failed to read daemon status") }
@@ -64,7 +64,7 @@ class DeskFleetBridge : Plugin() {
     }
 
     @PluginMethod
-    fun ksuDaemonPrepareEnrollment(call: PluginCall) {
+    fun localDaemonPrepareEnrollment(call: PluginCall) {
         val serverUrl = call.getString("serverUrl")?.takeIf { it.isNotBlank() }
             ?: return call.reject("Missing serverUrl")
         val teamId = call.getString("teamId")?.takeIf { it.isNotBlank() }
@@ -81,7 +81,7 @@ class DeskFleetBridge : Plugin() {
     }
 
     @PluginMethod
-    fun ksuDaemonEnroll(call: PluginCall) {
+    fun localDaemonEnroll(call: PluginCall) {
         val serverUrl = call.getString("serverUrl")?.takeIf { it.isNotBlank() }
             ?: return call.reject("Missing serverUrl")
         val machineId = call.getString("machineId")?.takeIf { it.isNotBlank() }

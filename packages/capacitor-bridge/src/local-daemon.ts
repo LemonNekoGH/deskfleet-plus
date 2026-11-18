@@ -2,10 +2,10 @@ import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet
 
 export type PreparedEnrollment = LocalEnrollment & { identityToken: string }
 
-export interface KsuDaemonBridgePlugin {
-  ksuDaemonStatus(): Promise<LocalMachineStatus>
-  ksuDaemonPrepareEnrollment(options: { serverUrl: string; teamId: string }): Promise<PreparedEnrollment>
-  ksuDaemonEnroll(options: {
+export interface LocalDaemonBridgePlugin {
+  localDaemonStatus(): Promise<LocalMachineStatus>
+  localDaemonPrepareEnrollment(options: { serverUrl: string; teamId: string }): Promise<PreparedEnrollment>
+  localDaemonEnroll(options: {
     serverUrl: string
     machineId: string
     teamId: string
@@ -15,14 +15,14 @@ export interface KsuDaemonBridgePlugin {
 }
 
 /**
- * Attach local-machine enrollment to an Android CentralApi using the KernelSU
- * chroot daemon managed by the native Capacitor bridge.
+ * Attach local-machine enrollment to an Android CentralApi using the embedded
+ * proot Linux container managed by the native Capacitor bridge.
  */
 export function attachAndroidLocalEnrollment(
   central: CentralApi,
-  plugin: KsuDaemonBridgePlugin,
+  plugin: LocalDaemonBridgePlugin,
 ): void {
-  const localEnrollment = (): Promise<LocalMachineStatus> => plugin.ksuDaemonStatus()
+  const localEnrollment = (): Promise<LocalMachineStatus> => plugin.localDaemonStatus()
 
   const enrollLocal = async (teamId: string, name?: string): Promise<LocalEnrollment> => {
     const chosen = typeof name === "string" ? name.trim() : undefined
@@ -36,14 +36,14 @@ export function attachAndroidLocalEnrollment(
     if (current?.configured && !current.revoked) {
       return current
     }
-    const prepared = await plugin.ksuDaemonPrepareEnrollment({ serverUrl, teamId })
+    const prepared = await plugin.localDaemonPrepareEnrollment({ serverUrl, teamId })
     const result = await central.enrollHeadless(teamId, {
       name: chosen || prepared.machineName,
       originId: prepared.identity.originId,
       localMachineId: prepared.identity.machineId,
       identityToken: prepared.identityToken,
     })
-    return plugin.ksuDaemonEnroll({
+    return plugin.localDaemonEnroll({
       serverUrl,
       machineId: result.machine.id,
       teamId,
