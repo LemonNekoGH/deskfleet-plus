@@ -124,6 +124,7 @@ internal class ProotDaemonManager(
     private val prootTmpDir = File(baseDir, "proot-tmp")
     private val workspaceDir = File(rootfsDir, "root/workspace")
     private val daemonBin = File(rootfsDir, "opt/deskfleet/deskfleet-daemon")
+    private val scrcpyJar = File(rootfsDir, "opt/deskfleet/scrcpy-server.jar")
     private val versionFile = File(baseDir, "version")
 
     fun status(): String {
@@ -218,7 +219,7 @@ internal class ProotDaemonManager(
                     listOf(
                         "/bin/sh",
                         "-c",
-                        "apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y --no-install-recommends ca-certificates git curl && rm -rf /var/lib/apt/lists/*",
+                        "apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y --no-install-recommends ca-certificates git curl adb && rm -rf /var/lib/apt/lists/*",
                     ),
                 )
             } finally {
@@ -244,6 +245,11 @@ internal class ProotDaemonManager(
             } finally {
                 if (tmpArchive.exists()) tmpArchive.delete()
             }
+        }
+
+        if (!scrcpyJar.isFile) {
+            downloader.download(SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
+            scrcpyJar.setReadable(true, false)
         }
     }
 
@@ -320,6 +326,7 @@ internal class ProotDaemonManager(
 
     companion object {
         const val UBUNTU_ROOTFS_URL = "https://partner-images.canonical.com/core/noble/current/ubuntu-noble-core-cloudimg-arm64-root.tar.gz"
+        const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"
 
         internal fun prootBaseEnv(nativeLibraryDir: File, baseDir: File): Map<String, String> = mapOf(
             "LD_LIBRARY_PATH" to nativeLibraryDir.absolutePath,
@@ -363,6 +370,8 @@ internal class ProotDaemonManager(
                     "SHELL=/bin/bash",
                     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "DESKFLEET_DAEMON_DIRECTORY=/var/lib/deskfleet",
+                    "DESKFLEET_ANDROID_SCRCPY_SERVER=/opt/deskfleet/scrcpy-server.jar",
+                    "DESKFLEET_ANDROID_SCRCPY_VERSION=3.1",
                 ) + commandArgs,
                 env = prootBaseEnv(nativeLibraryDir, baseDir),
             )
