@@ -5,7 +5,9 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import test from "node:test"
 import {
+  buildStaticFrameworkBundle,
   buildStikJitInfoPlist,
+  buildStikJitXcframeworkPlist,
   downloadCachedArtifact,
   FORBIDDEN_STAGED_ARTIFACTS,
   prepareLibrvvmHeaders,
@@ -126,11 +128,41 @@ test("stageStikJitFramework extracts StikJIT.xcframework and synthesizes Info.pl
     writeFileSync(zipPath, zipBytes)
 
     const frameworksDir = join(workDir, "Frameworks")
-    const staged = stageStikJitFramework(zipPath, frameworksDir, STIKJIT_SPEC.version)
+    const staged = stageStikJitFramework(zipPath, frameworksDir, STIKJIT_SPEC.version, false)
     const synthesizedPlist = join(staged, "ios-arm64/StikJIT.framework/Info.plist")
     assert.equal(existsSync(synthesizedPlist), true)
     assert.equal(readFileSync(synthesizedPlist, "utf8"), buildStikJitInfoPlist(STIKJIT_SPEC.version))
     assert.match(readFileSync(synthesizedPlist, "utf8"), /<string>17\.4<\/string>/)
+
+    const dualPlist = buildStikJitXcframeworkPlist(true)
+    assert.match(dualPlist, /ios-arm64-simulator/)
+    assert.match(dualPlist, /<key>SupportedPlatformVariant<\/key>\s*<string>simulator<\/string>/)
+  } finally {
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
+test("buildStaticFrameworkBundle produces a framework module that avoids include/module.modulemap collisions", () => {
+  const workDir = mkdtempSync(join(tmpdir(), "deskfleet-static-fw-test-"))
+  try {
+    const libPath = join(workDir, "libdemo.a")
+    const hdrPath = join(workDir, "demo.h")
+    writeFileSync(libPath, "archive-bytes")
+    writeFileSync(hdrPath, "void demo(void);\n")
+
+    const fw = buildStaticFrameworkBundle({
+      outputDir: join(workDir, "out"),
+      frameworkName: "IshPlusRPPairing",
+      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      staticLibPath: libPath,
+      headerSourcePath: hdrPath,
+      headerFileName: "ishplus_rppairing.h",
+      platform: "iPhoneOS",
+    })
+    assert.equal(existsSync(join(fw, "IshPlusRPPairing")), true)
+    assert.equal(existsSync(join(fw, "Headers/ishplus_rppairing.h")), true)
+    assert.equal(existsSync(join(fw, "Info.plist")), true)
+    assert.match(readFileSync(join(fw, "Modules/module.modulemap"), "utf8"), /framework module IshPlusRPPairing/)
   } finally {
     rmSync(workDir, { recursive: true, force: true })
   }

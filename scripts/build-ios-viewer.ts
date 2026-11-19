@@ -221,7 +221,10 @@ export async function downloadCachedArtifact(
   }
 }
 
-export function buildStikJitInfoPlist(version: string = STIKJIT_SPEC.version): string {
+export function buildStikJitInfoPlist(
+  version: string = STIKJIT_SPEC.version,
+  platform: "iPhoneOS" | "iPhoneSimulator" = "iPhoneOS",
+): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -241,7 +244,7 @@ export function buildStikJitInfoPlist(version: string = STIKJIT_SPEC.version): s
 \t<key>CFBundleVersion</key>
 \t<string>${version}</string>
 \t<key>CFBundleSupportedPlatforms</key>
-\t<array><string>iPhoneOS</string></array>
+\t<array><string>${platform}</string></array>
 \t<key>MinimumOSVersion</key>
 \t<string>17.4</string>
 </dict>
@@ -249,10 +252,164 @@ export function buildStikJitInfoPlist(version: string = STIKJIT_SPEC.version): s
 `
 }
 
+export function buildStikJitXcframeworkPlist(includeSimulator: boolean): string {
+  const simSlice = includeSimulator
+    ? `\t\t<dict>
+\t\t\t<key>BinaryPath</key>
+\t\t\t<string>StikJIT.framework/StikJIT</string>
+\t\t\t<key>LibraryIdentifier</key>
+\t\t\t<string>ios-arm64-simulator</string>
+\t\t\t<key>LibraryPath</key>
+\t\t\t<string>StikJIT.framework</string>
+\t\t\t<key>SupportedArchitectures</key>
+\t\t\t<array>
+\t\t\t\t<string>arm64</string>
+\t\t\t</array>
+\t\t\t<key>SupportedPlatform</key>
+\t\t\t<string>ios</string>
+\t\t\t<key>SupportedPlatformVariant</key>
+\t\t\t<string>simulator</string>
+\t\t</dict>
+`
+    : ""
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>AvailableLibraries</key>
+\t<array>
+\t\t<dict>
+\t\t\t<key>BinaryPath</key>
+\t\t\t<string>StikJIT.framework/StikJIT</string>
+\t\t\t<key>LibraryIdentifier</key>
+\t\t\t<string>ios-arm64</string>
+\t\t\t<key>LibraryPath</key>
+\t\t\t<string>StikJIT.framework</string>
+\t\t\t<key>SupportedArchitectures</key>
+\t\t\t<array>
+\t\t\t\t<string>arm64</string>
+\t\t\t</array>
+\t\t\t<key>SupportedPlatform</key>
+\t\t\t<string>ios</string>
+\t\t</dict>
+${simSlice}\t</array>
+\t<key>CFBundlePackageType</key>
+\t<string>XFWK</string>
+\t<key>XCFrameworkFormatVersion</key>
+\t<string>1.0</string>
+</dict>
+</plist>
+`
+}
+
+export function buildStaticFrameworkInfoPlist(
+  frameworkName: string,
+  bundleId: string,
+  platform: "iPhoneOS" | "iPhoneSimulator",
+  minimumOSVersion: string = "16.0",
+): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>CFBundleExecutable</key>
+\t<string>${frameworkName}</string>
+\t<key>CFBundleIdentifier</key>
+\t<string>${bundleId}</string>
+\t<key>CFBundleInfoDictionaryVersion</key>
+\t<string>6.0</string>
+\t<key>CFBundleName</key>
+\t<string>${frameworkName}</string>
+\t<key>CFBundlePackageType</key>
+\t<string>FMWK</string>
+\t<key>CFBundleShortVersionString</key>
+\t<string>1.0</string>
+\t<key>CFBundleVersion</key>
+\t<string>1</string>
+\t<key>CFBundleSupportedPlatforms</key>
+\t<array><string>${platform}</string></array>
+\t<key>MinimumOSVersion</key>
+\t<string>${minimumOSVersion}</string>
+</dict>
+</plist>
+`
+}
+
+/**
+ * Wraps a static archive (.a) and public header into a .framework bundle so multiple
+ * binaryTargets do not collide on Build/Products/.../include/module.modulemap.
+ */
+export function buildStaticFrameworkBundle(options: {
+  readonly outputDir: string
+  readonly frameworkName: string
+  readonly bundleId: string
+  readonly staticLibPath: string
+  readonly headerSourcePath: string
+  readonly headerFileName: string
+  readonly platform: "iPhoneOS" | "iPhoneSimulator"
+}): string {
+  const fwDir = join(options.outputDir, `${options.frameworkName}.framework`)
+  rmSync(fwDir, { recursive: true, force: true })
+  const headersDir = join(fwDir, "Headers")
+  const modulesDir = join(fwDir, "Modules")
+  mkdirSync(headersDir, { recursive: true })
+  mkdirSync(modulesDir, { recursive: true })
+
+  copyFileSync(options.staticLibPath, join(fwDir, options.frameworkName))
+  copyFileSync(options.headerSourcePath, join(headersDir, options.headerFileName))
+  writeFileSync(
+    join(modulesDir, "module.modulemap"),
+    `framework module ${options.frameworkName} {
+    header "${options.headerFileName}"
+    export *
+}
+`,
+    "utf8",
+  )
+  writeFileSync(
+    join(fwDir, "Info.plist"),
+    buildStaticFrameworkInfoPlist(options.frameworkName, options.bundleId, options.platform),
+    "utf8",
+  )
+  return fwDir
+}
+
+function addStikJitSimulatorStubSlice(xcframeworkDir: string, version: string): void {
+  const simFwDir = join(xcframeworkDir, "ios-arm64-simulator/StikJIT.framework")
+  mkdirSync(simFwDir, { recursive: true })
+  const stubDir = mkdtempSync(join(tmpdir(), "deskfleet-stikjit-sim-"))
+  try {
+    const stubC = join(stubDir, "stub.c")
+    writeFileSync(stubC, "void deskfleet_stikjit_simulator_stub(void) {}\n", "utf8")
+    execFileSync(
+      "xcrun",
+      [
+        "--sdk",
+        "iphonesimulator",
+        "clang",
+        "-dynamiclib",
+        "-target",
+        "arm64-apple-ios17.4-simulator",
+        "-install_name",
+        "@rpath/StikJIT.framework/StikJIT",
+        stubC,
+        "-o",
+        join(simFwDir, "StikJIT"),
+      ],
+      { stdio: "inherit" },
+    )
+    writeFileSync(join(simFwDir, "Info.plist"), buildStikJitInfoPlist(version, "iPhoneSimulator"), "utf8")
+    writeFileSync(join(xcframeworkDir, "Info.plist"), buildStikJitXcframeworkPlist(true), "utf8")
+  } finally {
+    rmSync(stubDir, { recursive: true, force: true })
+  }
+}
+
 export function stageStikJitFramework(
   zipPath: string,
   frameworksDir: string,
   version: string = STIKJIT_SPEC.version,
+  includeSimulatorStub: boolean = process.platform === "darwin",
 ): string {
   mkdirSync(frameworksDir, { recursive: true })
   const destDir = join(frameworksDir, "StikJIT.xcframework")
@@ -285,7 +442,10 @@ export function stageStikJitFramework(
   const infoPlist = join(destDir, "ios-arm64/StikJIT.framework/Info.plist")
   if (!existsSync(infoPlist)) {
     mkdirSync(dirname(infoPlist), { recursive: true })
-    writeFileSync(infoPlist, buildStikJitInfoPlist(version), "utf8")
+    writeFileSync(infoPlist, buildStikJitInfoPlist(version, "iPhoneOS"), "utf8")
+  }
+  if (includeSimulatorStub) {
+    addStikJitSimulatorStubSlice(destDir, version)
   }
   return destDir
 }
@@ -511,18 +671,7 @@ export function buildRppairingXcframework(repoRoot: string, frameworksDir: strin
   try {
     const simObj = join(simTemp, "simulator.o")
     const simLib = join(simTemp, "libishplus_rppairing.a")
-    const headersDir = join(simTemp, "headers")
-    mkdirSync(headersDir, { recursive: true })
-    copyFileSync(join(rppairingDir, "include/ishplus_rppairing.h"), join(headersDir, "ishplus_rppairing.h"))
-    writeFileSync(
-      join(headersDir, "module.modulemap"),
-      `module IshPlusRPPairing {
-    header "ishplus_rppairing.h"
-    export *
-}
-`,
-      "utf8",
-    )
+    const headerSrc = join(rppairingDir, "include/ishplus_rppairing.h")
 
     execFileSync(
       "xcrun",
@@ -541,18 +690,33 @@ export function buildRppairingXcframework(repoRoot: string, frameworksDir: strin
     )
     execFileSync("ar", ["rcs", simLib, simObj], { cwd: repoRoot, stdio: "inherit" })
 
+    const deviceFw = buildStaticFrameworkBundle({
+      outputDir: join(simTemp, "device"),
+      frameworkName: "IshPlusRPPairing",
+      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      staticLibPath: deviceLib,
+      headerSourcePath: headerSrc,
+      headerFileName: "ishplus_rppairing.h",
+      platform: "iPhoneOS",
+    })
+    const simFw = buildStaticFrameworkBundle({
+      outputDir: join(simTemp, "simulator"),
+      frameworkName: "IshPlusRPPairing",
+      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      staticLibPath: simLib,
+      headerSourcePath: headerSrc,
+      headerFileName: "ishplus_rppairing.h",
+      platform: "iPhoneSimulator",
+    })
+
     execFileSync(
       "xcodebuild",
       [
         "-create-xcframework",
-        "-library",
-        deviceLib,
-        "-headers",
-        headersDir,
-        "-library",
-        simLib,
-        "-headers",
-        headersDir,
+        "-framework",
+        deviceFw,
+        "-framework",
+        simFw,
         "-output",
         xcframeworkDir,
       ],
