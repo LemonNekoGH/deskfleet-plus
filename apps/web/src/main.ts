@@ -2,7 +2,7 @@ import { App as CapApp } from "@capacitor/app"
 import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core"
 import {
   DeskFleetBridge,
-  attachAndroidLocalEnrollment,
+  attachLocalEnrollment,
   createCapacitorFilesApi,
   createCapacitorNativeDesktopApi,
   createCapacitorNetworkDiagnosticsApi,
@@ -36,6 +36,9 @@ if (Capacitor.isNativePlatform()) {
   adapter.haptic = kind => { void DeskFleetBridge.haptic({ kind }) }
 }
 if (Capacitor.getPlatform() === "ios") {
+  if (adapter.central) {
+    attachLocalEnrollment(adapter.central)
+  }
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
 }
 if (Capacitor.isNativePlatform() && adapter.central) {
@@ -68,7 +71,7 @@ if (Capacitor.isNativePlatform() && adapter.central) {
 }
 if (Capacitor.getPlatform() === "android") {
   if (adapter.central) {
-    attachAndroidLocalEnrollment(adapter.central)
+    attachLocalEnrollment(adapter.central)
   }
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
   const androidUpdates = await createAndroidUpdates({ getAppInfo: () => CapApp.getInfo() })

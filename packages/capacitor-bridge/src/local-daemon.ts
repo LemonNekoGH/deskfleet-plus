@@ -15,10 +15,11 @@ export interface LocalDaemonBridgePlugin {
 }
 
 /**
- * Attach local-machine enrollment to an Android CentralApi using the embedded
- * proot Linux container managed by the native Capacitor bridge.
+ * Attach local-machine enrollment to a mobile CentralApi using the embedded
+ * Linux runtime managed by the native Capacitor bridge (proot on Android,
+ * pure-JIT librvvm on iOS).
  */
-export function attachAndroidLocalEnrollment(
+export function attachLocalEnrollment(
   central: CentralApi,
   plugin: LocalDaemonBridgePlugin,
 ): void {
@@ -55,3 +56,5 @@ export function attachAndroidLocalEnrollment(
   central.localEnrollment = localEnrollment
   central.enrollLocal = enrollLocal
 }
+
+export const attachAndroidLocalEnrollment = attachLocalEnrollment

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
-import { attachAndroidLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
+import { attachAndroidLocalEnrollment, attachLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
 
 function createFakeCentral(initialServerUrl = "https://fleet.example"): {
   central: CentralApi
@@ -34,6 +34,7 @@ function createEnrollment(overrides: Partial<LocalEnrollment> = {}): LocalEnroll
 }
 
 test("attachAndroidLocalEnrollment exposes localEnrollment status from native plugin", async () => {
+  expect(attachLocalEnrollment).toBe(attachAndroidLocalEnrollment)
   const { central } = createFakeCentral()
   const expected: LocalMachineStatus = {
     machineName: "Pixel 9 Pro",

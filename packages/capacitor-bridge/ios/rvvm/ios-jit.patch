@@ -1,0 +1,321 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7d9c413..ddc9a1f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -130,7 +130,7 @@ target_compile_definitions(rvvm_common INTERFACE "RVVM_VERSION=\"${RVVM_VERSION}
+ include(CheckIPOSupported)
+ check_ipo_supported(RESULT lto_supported OUTPUT lto_error)
+ 
+-if (lto_supported)
++if (lto_supported AND NOT IOS)
+ 	set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+ else()
+ 	message(STATUS "${COLLOR_YELLOW}LTO is not supported by this toolchain: ${lto_error}")
+@@ -353,10 +353,14 @@ if (BUILD_LIBRETRO)
+ endif()
+ 
+ # Main executable
+-add_executable(rvvm_cli ${RVVM_MAIN_SRC} $<TARGET_OBJECTS:rvvm_objlib>)
+-target_link_libraries(rvvm_cli PRIVATE rvvm_common)
+-set_target_properties(rvvm_cli PROPERTIES OUTPUT_NAME rvvm)
++if (EXISTS "${RVVM_MAIN_SRC}")
++	add_executable(rvvm_cli ${RVVM_MAIN_SRC} $<TARGET_OBJECTS:rvvm_objlib>)
++	target_link_libraries(rvvm_cli PRIVATE rvvm_common)
++	set_target_properties(rvvm_cli PROPERTIES OUTPUT_NAME rvvm)
++endif()
+ 
+ # Main executable
+-add_executable(rvvm_user ${RVVM_USER_MAIN_SRC} $<TARGET_OBJECTS:rvvm_objlib>)
+-target_link_libraries(rvvm_user PRIVATE rvvm_common)
++if (EXISTS "${RVVM_USER_MAIN_SRC}")
++	add_executable(rvvm_user ${RVVM_USER_MAIN_SRC} $<TARGET_OBJECTS:rvvm_objlib>)
++	target_link_libraries(rvvm_user PRIVATE rvvm_common)
++endif()
+diff --git a/include/rvvm/rvvm.h b/include/rvvm/rvvm.h
+index 4da8562..0886959 100644
+--- a/include/rvvm/rvvm.h
++++ b/include/rvvm/rvvm.h
+@@ -165,6 +165,23 @@ RVVM_PUBLIC void rvvm_free_machine(rvvm_machine_t* machine);
+  */
+ RVVM_PUBLIC void rvvm_run_eventloop(void);
+ 
++/**
++ * Optional custom guest RAM allocator hooks (e.g. iOS shared-memory RAM donor)
++ */
++typedef void* (*rvvm_ram_alloc_cb_t)(size_t size);
++typedef bool  (*rvvm_ram_free_cb_t)(void* ptr, size_t size);
++
++/**
++ * Register optional custom RAM allocator callbacks used by riscv_init_ram()
++ */
++RVVM_PUBLIC void rvvm_set_ram_allocator(rvvm_ram_alloc_cb_t alloc_cb, rvvm_ram_free_cb_t free_cb);
++
++/**
++ * Detach an iOS 26+ JIT debugger session once all vCPU JIT caches are mapped.
++ * No-op on non-iOS platforms and on iOS versions without a live debugger.
++ */
++RVVM_PUBLIC void rvvm_ios_jit_detach(void);
++
+ /** @}*/
+ 
+ /**
+diff --git a/src/core/rvvm.c b/src/core/rvvm.c
+index f7fd451..7253a4e 100644
+--- a/src/core/rvvm.c
++++ b/src/core/rvvm.c
+@@ -722,6 +722,7 @@ PUBLIC bool rvvm_start_machine(rvvm_machine_t* machine)
+             vector_foreach (machine->harts, i) {
+                 riscv_hart_prepare(vector_at(machine->harts, i));
+             }
++            rvvm_ios_jit_detach();
+             vector_foreach (machine->harts, i) {
+                 riscv_hart_spawn(vector_at(machine->harts, i));
+             }
+diff --git a/src/cpu/riscv_mmu.c b/src/cpu/riscv_mmu.c
+index 9e4db4a..42c49bd 100644
+--- a/src/cpu/riscv_mmu.c
++++ b/src/cpu/riscv_mmu.c
+@@ -32,6 +32,15 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ 
+ #define RISCV_MMU_DEBUG_ACCESS (RISCV_MMU_READ | RISCV_MMU_EXEC | RISCV_MMU_WRITE)
+ 
++static rvvm_ram_alloc_cb_t custom_ram_alloc = NULL;
++static rvvm_ram_free_cb_t  custom_ram_free  = NULL;
++
++RVVM_PUBLIC void rvvm_set_ram_allocator(rvvm_ram_alloc_cb_t alloc_cb, rvvm_ram_free_cb_t free_cb)
++{
++    custom_ram_alloc = alloc_cb;
++    custom_ram_free  = free_cb;
++}
++
+ bool riscv_init_ram(rvvm_ram_t* mem, rvvm_addr_t base_addr, size_t size)
+ {
+     // Memory boundaries should be always aligned to page size
+@@ -43,7 +52,13 @@ bool riscv_init_ram(rvvm_ram_t* mem, rvvm_addr_t base_addr, size_t size)
+     uint32_t vma_flags = VMA_RDWR;
+     if (!rvvm_has_arg("no_ksm")) vma_flags |= VMA_KSM;
+     if (!rvvm_has_arg("no_thp")) vma_flags |= VMA_THP;
+-    mem->data = vma_alloc(NULL, size, vma_flags);
++    mem->data = NULL;
++    if (custom_ram_alloc) {
++        mem->data = custom_ram_alloc(size);
++    }
++    if (!mem->data) {
++        mem->data = vma_alloc(NULL, size, vma_flags);
++    }
+ 
+     if (!mem->data) {
+         rvvm_error("Memory allocation failure");
+@@ -57,7 +72,9 @@ bool riscv_init_ram(rvvm_ram_t* mem, rvvm_addr_t base_addr, size_t size)
+ 
+ void riscv_free_ram(rvvm_ram_t* mem)
+ {
+-    vma_free(mem->data, mem->size);
++    if (!custom_ram_free || !custom_ram_free(mem->data, mem->size)) {
++        vma_free(mem->data, mem->size);
++    }
+     // Prevent accidental access
+     mem->size = 0;
+     mem->addr = 0;
+diff --git a/src/rvjit/rvjit.c b/src/rvjit/rvjit.c
+index 66556f3..34c9381 100644
+--- a/src/rvjit/rvjit.c
++++ b/src/rvjit/rvjit.c
+@@ -18,6 +18,14 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ #include "vector.h"
+ #include "vma_ops.h"
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#include <libkern/OSCacheControl.h>
++#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
++#define RVJIT_IOS_DEVICE 1
++#endif
++#endif
++
+ #if defined(RVJIT_ARM64) && defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000
+ /*
+  * Apple Silicon needs special care with JIT memory protection
+@@ -84,6 +92,8 @@ static void rvjit_flush_icache(const void* addr, size_t size)
+ #elif defined(_WIN32)
+     // NT disables `dc civac` / `dc cvau` for userspace, WinAPI must be used
+     FlushInstructionCache(GetCurrentProcess(), start, size);
++#elif defined(RVJIT_IOS_DEVICE)
++    sys_icache_invalidate(start, size);
+ #elif defined(RVJIT_ARM64) && defined(GNU_EXTS)
+     rvjit_arm64_fluch_icache(start, size);
+ #elif defined(RVJIT_LA64) && defined(GNU_EXTS)
+@@ -113,8 +123,13 @@ bool rvjit_ctx_init(rvjit_block_t* block, size_t size)
+         return true;
+     }
+ 
++#if defined(RVJIT_IOS_DEVICE)
++    if (true) {
++        rvvm_info("iOS device detected, allocating W^X multi-mmap RVJIT heap");
++#else
+     if (rvvm_has_arg("rvjit_disable_rwx")) {
+         rvvm_info("RWX disabled, allocating W^X multi-mmap RVJIT heap");
++#endif
+     } else {
+         block->heap.data = vma_alloc(NULL, size, VMA_RWX);
+         block->heap.code = block->heap.data;
+@@ -277,7 +292,7 @@ rvjit_func_t rvjit_block_finalize(rvjit_block_t* block)
+             uint8_t* jptr = vector_at(*linked_blocks, i);
+             rvjit_linker_patch_jmp(jptr, ((size_t)dest) - ((size_t)jptr));
+ #ifndef RVJIT_GLOBAL_ICACHE_FLUSH
+-            rvjit_flush_icache(jptr, 8);
++            rvjit_flush_icache(block->heap.code + ((size_t)jptr - (size_t)block->heap.data), 8);
+ #endif
+         }
+         vector_free(*linked_blocks);
+diff --git a/src/util/vma_ops.c b/src/util/vma_ops.c
+index 9e43cc9..ad49427 100644
+--- a/src/util/vma_ops.c
++++ b/src/util/vma_ops.c
+@@ -14,6 +14,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ #include "compiler.h"
+ #include "mem_ops.h"
+ #include "utils.h"
++#include <rvvm/rvvm.h>
+ #include "vma_ops.h"
+ 
+ PUSH_OPTIMIZATION_SIZE
+@@ -131,9 +132,16 @@ static void seh_suspend_access_violation(void)
+ #endif
+ 
+ #if defined(HOST_TARGET_DARWIN) && defined(__aarch64__)
++#include <TargetConditionals.h>
++#include <mach/mach_init.h>
+ #include <mach/task.h>         // For mach_msg_type_number_t, thread_act_t, task_threads()
+ #include <mach/thread_state.h> // For mach_task_self(), thread_get_register_pointer_values()
+ #include <mach/vm_map.h>       // For vm_address_t, vm_deallocate()
++#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
++#include <sys/sysctl.h>
++#define VMA_IOS_ARM64_DEVICE 1
++#undef MAP_JIT
++#endif
+ #else
+ // Passing MAP_JIT on non-ARM64 is pointless, and causes an mmap() error on old Darwin
+ #undef MAP_JIT
+@@ -346,7 +354,7 @@ bool vma_broadcast_membarrier(void)
+         }
+         atomic_store_uint32_relax(&has_membarrier, false);
+     }
+-#elif defined(VMA_MMAP_IMPL) && defined(HOST_TARGET_DARWIN) && defined(__aarch64__)
++#elif defined(VMA_MMAP_IMPL) && defined(HOST_TARGET_DARWIN) && defined(__aarch64__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+     // Request stack pointer value on each thread to enforce a global memory barrier
+     mach_msg_type_number_t num_threads = 0;
+     thread_act_t*          ptr_threads = NULL;
+@@ -534,10 +542,111 @@ void* vma_mmap(void* addr, size_t size, uint32_t flags, rvfile_t* file, uint64_t
+     return ret ? (ret + ptr_diff) : NULL;
+ }
+ 
++#if defined(VMA_IOS_ARM64_DEVICE)
++static bool vma_ios_is_traced(void)
++{
++    struct kinfo_proc info;
++    size_t            info_size = sizeof(info);
++    int               mib[4]    = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
++    memset(&info, 0, sizeof(info));
++    if (sysctl(mib, 4, &info, &info_size, NULL, 0) != 0) {
++        return false;
++    }
++    return (info.kp_proc.p_flag & P_TRACED) != 0;
++}
++
++__attribute__((noinline, optnone, naked)) static void vma_ios_jit26_detach(void)
++{
++    __asm__ __volatile__("mov x16, #0\n"
++                         "brk #0xf00d\n"
++                         "ret\n");
++}
++
++__attribute__((noinline, optnone, naked)) static void* vma_ios_jit26_prepare_region(void* addr __attribute__((unused)), size_t len __attribute__((unused)))
++{
++    __asm__ __volatile__("mov x16, #1\n"
++                         "brk #0xf00d\n"
++                         "ret\n");
++}
++
++static bool vma_ios_remap_rw(void* rx, size_t size, void** out_rw)
++{
++    vm_address_t rw_addr  = 0;
++    vm_prot_t    cur_prot = VM_PROT_NONE;
++    vm_prot_t    max_prot = VM_PROT_NONE;
++    kern_return_t kr = vm_remap(mach_task_self(), &rw_addr, (vm_size_t)size, 0, VM_FLAGS_ANYWHERE,
++                                mach_task_self(), (vm_address_t)rx, FALSE, &cur_prot, &max_prot,
++                                VM_INHERIT_NONE);
++    if (kr != KERN_SUCCESS) {
++        return false;
++    }
++    kr = vm_protect(mach_task_self(), rw_addr, (vm_size_t)size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
++    if (kr != KERN_SUCCESS) {
++        vm_deallocate(mach_task_self(), rw_addr, (vm_size_t)size);
++        return false;
++    }
++    *out_rw = (void*)rw_addr;
++    return true;
++}
++#endif
++
++RVVM_PUBLIC void rvvm_ios_jit_detach(void)
++{
++#if defined(VMA_IOS_ARM64_DEVICE)
++    if (vma_ios_is_traced()) {
++        vma_ios_jit26_detach();
++    }
++#endif
++}
++
+ bool vma_multi_mmap(void** rw, void** exec, size_t size)
+ {
+     size = align_size_up(size, vma_granularity());
+-#if defined(VMA_MMAP_IMPL)
++#if defined(VMA_IOS_ARM64_DEVICE)
++    *rw   = NULL;
++    *exec = NULL;
++    void* rx = NULL;
++    if (vma_ios_is_traced()) {
++        rx = vma_ios_jit26_prepare_region(NULL, size);
++        if (rx && rx != MAP_FAILED && vma_ios_remap_rw(rx, size, rw)) {
++            *exec = rx;
++            return true;
++        }
++        if (rx && rx != MAP_FAILED) {
++            munmap(rx, size);
++        }
++        vm_address_t rw_addr = 0;
++        if (vm_allocate(mach_task_self(), &rw_addr, (vm_size_t)size, VM_FLAGS_ANYWHERE) == KERN_SUCCESS) {
++            vm_address_t rx_addr  = 0;
++            vm_prot_t    cur_prot = VM_PROT_NONE;
++            vm_prot_t    max_prot = VM_PROT_NONE;
++            if (vm_remap(mach_task_self(), &rx_addr, (vm_size_t)size, 0, VM_FLAGS_ANYWHERE,
++                         mach_task_self(), rw_addr, FALSE, &cur_prot, &max_prot, VM_INHERIT_NONE) == KERN_SUCCESS) {
++                if (vm_protect(mach_task_self(), rx_addr, (vm_size_t)size, FALSE,
++                               VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS) {
++                    void* prepared = vma_ios_jit26_prepare_region((void*)rx_addr, size);
++                    if (prepared && prepared != MAP_FAILED) {
++                        *rw   = (void*)rw_addr;
++                        *exec = prepared;
++                        return true;
++                    }
++                }
++                vm_deallocate(mach_task_self(), rx_addr, (vm_size_t)size);
++            }
++            vm_deallocate(mach_task_self(), rw_addr, (vm_size_t)size);
++        }
++        return false;
++    }
++    rx = mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (rx != MAP_FAILED) {
++        if (vma_ios_remap_rw(rx, size, rw)) {
++            *exec = rx;
++            return true;
++        }
++        munmap(rx, size);
++    }
++    return false;
++#elif defined(VMA_MMAP_IMPL)
+     int memfd = vma_anon_memfd(size);
+     if (memfd > 0) {
+         *rw   = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NOSYNC, memfd, 0);

@@ -17,7 +17,7 @@ import {
 import type { OutlineAudioApi, OutlineAudioStatus } from "@deskfleet/client/outline-audio"
 import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
-import { attachAndroidLocalEnrollment as localDaemonEnrollment, type LocalDaemonBridgePlugin } from "./local-daemon.ts"
+import { attachLocalEnrollment as localDaemonEnrollment, type LocalDaemonBridgePlugin } from "./local-daemon.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
 export {
   ANDROID_TASK_NOTIFICATION_CHANNEL_ID,
@@ -84,12 +84,14 @@ export type OutlineAudioBridgePlugin = Pick<
 
 export const DeskFleetBridge = registerPlugin<DeskFleetBridgeCapacitorPlugin>("DeskFleetBridge")
 
-export function attachAndroidLocalEnrollment(
+export function attachLocalEnrollment(
   central: CentralApi,
   plugin: LocalDaemonBridgePlugin = DeskFleetBridge,
 ): void {
   localDaemonEnrollment(central, plugin)
 }
+
+export const attachAndroidLocalEnrollment = attachLocalEnrollment
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {
   return createBrowserFiles(central, () => new CapacitorFilesEndpoint(plugin))
