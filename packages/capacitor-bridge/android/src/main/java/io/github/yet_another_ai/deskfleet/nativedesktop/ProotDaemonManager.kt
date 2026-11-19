@@ -192,32 +192,6 @@ internal class ProotDaemonManager(
             return
         }
 
-        val bundledAsset = assetOpener.open(EMBEDDED_ROOTFS_ASSET)
-        if (bundledAsset != null) {
-            val rootfsTar = File(cacheDir, "debian-rootfs.tar")
-            try {
-                bundledAsset.use { raw ->
-                    GZIPInputStream(raw).use { gzip ->
-                        FileOutputStream(rootfsTar).use { out ->
-                            gzip.copyTo(out)
-                        }
-                    }
-                }
-                extractRootfsTar(rootfsTar, shellBin)
-                prepareRootfsDirectories()
-                if (daemonBin.exists()) {
-                    daemonBin.setExecutable(true, false)
-                }
-                if (scrcpyJar.isFile) {
-                    scrcpyJar.setReadable(true, false)
-                }
-                versionFile.writeText(versionName, Charsets.UTF_8)
-                return
-            } finally {
-                rootfsTar.delete()
-            }
-        }
-
         if (!shellBin.exists()) {
             val rootfsTar = File(cacheDir, "debian-rootfs.tar")
             try {
@@ -241,12 +215,22 @@ internal class ProotDaemonManager(
         if (!daemonBin.exists() || installedVersion != versionName) {
             val tmpArchive = File(rootfsDir, "tmp/deskfleet-linux-arm64.tar.gz")
             try {
-                downloadDaemonRelease(tmpArchive)
+                val bundledDaemon = assetOpener.open(EMBEDDED_DAEMON_ASSET)
+                if (bundledDaemon != null) {
+                    tmpArchive.parentFile?.mkdirs()
+                    bundledDaemon.use { src ->
+                        FileOutputStream(tmpArchive).use { out ->
+                            src.copyTo(out)
+                        }
+                    }
+                } else {
+                    downloadDaemonRelease(tmpArchive)
+                }
                 runCheckedInProot(
                     listOf(
                         "/bin/sh",
                         "-c",
-                        "tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet && rm -f /tmp/deskfleet-linux-arm64.tar.gz && chmod 0755 /opt/deskfleet/deskfleet-daemon",
+                        "rm -rf /opt/deskfleet/dsh && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz && chmod 0755 /opt/deskfleet/deskfleet-daemon",
                     ),
                 )
                 versionFile.writeText(versionName, Charsets.UTF_8)
@@ -256,7 +240,17 @@ internal class ProotDaemonManager(
         }
 
         if (!scrcpyJar.isFile) {
-            downloader.download(SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
+            val bundledScrcpy = assetOpener.open(EMBEDDED_SCRCPY_ASSET)
+            if (bundledScrcpy != null) {
+                scrcpyJar.parentFile?.mkdirs()
+                bundledScrcpy.use { src ->
+                    FileOutputStream(scrcpyJar).use { out ->
+                        src.copyTo(out)
+                    }
+                }
+            } else {
+                downloader.download(SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
+            }
             scrcpyJar.setReadable(true, false)
         }
     }
@@ -339,6 +333,11 @@ internal class ProotDaemonManager(
             resolv.delete()
             resolv.writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n", Charsets.UTF_8)
         }
+        val hosts = File(etcDir, "hosts")
+        if (!hosts.isFile || hosts.length() == 0L) {
+            hosts.delete()
+            hosts.writeText("127.0.0.1 localhost\n::1 localhost\n", Charsets.UTF_8)
+        }
     }
 
     private fun downloadDebianRootfs(destination: File) {
@@ -385,7 +384,8 @@ internal class ProotDaemonManager(
     }
 
     companion object {
-        const val EMBEDDED_ROOTFS_ASSET = "debian-rootfs.tar.gz"
+        const val EMBEDDED_DAEMON_ASSET = "deskfleet-daemon-linux-arm64.tar.gz"
+        const val EMBEDDED_SCRCPY_ASSET = "scrcpy-server.jar"
         const val DEBIAN_ROOTFS_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/slim/oci/blobs/rootfs.tar.gz"
         const val DEBIAN_ROOTFS_FALLBACK_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/oci/blobs/rootfs.tar.gz"
         const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"

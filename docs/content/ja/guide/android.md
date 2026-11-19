@@ -75,4 +75,4 @@ export DESKFLEET_ANDROID_SCRCPY_SERVER=/root/scrcpy-server-v3.1
 
 1. サードパーティ製の **`DeskFleet Plus`** APK（`moe.remon.deskfleet.plus`、公式版 `ai.yetanother.deskfleet` とは別アプリ）をインストールします。
 2. アプリにログインし、**マシンを追加 → このコンピューター** を開いて登録を確定します。
-3. アプリのプライベートサンドボックス内に同梱の Debian `arm64` `proot` コンテナと `deskfleet-daemon` が自動展開され、Wake lock 付きのフォアグラウンドサービスとして起動したうえでチーム登録まで自動的に完了します（Root や手動のコマンド操作は不要です）。
+3. アプリのプライベートサンドボックス内に Debian `arm64` `proot` コンテナを自動構築し、同梱の `deskfleet-daemon` と `scrcpy-server` を配置して Wake lock 付きのフォアグラウンドサービスとして起動したうえでチーム登録まで自動的に完了します（Root や手動のコマンド操作は不要です）。

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { basename, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 
 export const MIN_ANDROID_API = 34
 export const MIN_NDK_MAJOR = 28
@@ -267,45 +267,8 @@ export async function stageTermuxProotBinaries(
 
 export const SCRCPY_SERVER_VERSION = "3.1"
 export const SCRCPY_SERVER_URL = `https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_SERVER_VERSION}/scrcpy-server-v${SCRCPY_SERVER_VERSION}`
-
-export function buildEmbeddedRootfsDockerfile(): string {
-  return [
-    "FROM --platform=linux/arm64 debian:trixie-slim AS rootfs",
-    "ENV DEBIAN_FRONTEND=noninteractive",
-    "RUN apt-get update \\",
-    "  && apt-get install -y --no-install-recommends ca-certificates git curl adb \\",
-    "  && apt-get clean \\",
-    "  && find /usr/share/doc -mindepth 1 -type f ! -name copyright -delete \\",
-    "  && find /usr/share/doc -mindepth 1 -type d -empty -delete \\",
-    "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*",
-    "COPY deskfleet-linux-arm64.tar.gz /tmp/deskfleet-linux-arm64.tar.gz",
-    "COPY scrcpy-server.jar /opt/deskfleet/scrcpy-server.jar",
-    "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace \\",
-    "  && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet \\",
-    "  && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz \\",
-    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon \\",
-    "  && chmod 0644 /opt/deskfleet/scrcpy-server.jar \\",
-    "  && TAB=$(printf '\\t') \\",
-    "  && find / -xdev -type f -links +1 -printf '%i\\t%p\\n' \\",
-    "  | sort -n \\",
-    "  | awk -F'\\t' '$1 == prev { print target \"\\t\" $2; next } { prev = $1; target = $2 }' \\",
-    "  | while IFS=\"$TAB\" read -r target link; do ln -rsf \"$target\" \"$link\"; done",
-    "",
-    "FROM --platform=$BUILDPLATFORM debian:trixie-slim AS packager",
-    "COPY --from=rootfs / /rootfs",
-    "RUN rm -rf /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /rootfs/.dockerenv \\",
-    "  && mkdir -p /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /out \\",
-    "  && chmod 1777 /rootfs/tmp \\",
-    "  && rm -f /rootfs/etc/resolv.conf /rootfs/etc/hosts \\",
-    "  && printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > /rootfs/etc/resolv.conf \\",
-    "  && printf '127.0.0.1 localhost\\n::1 localhost\\n' > /rootfs/etc/hosts \\",
-    "  && tar -czf /out/debian-rootfs.tar.gz -C /rootfs .",
-    "",
-    "FROM scratch AS export",
-    "COPY --from=packager /out/debian-rootfs.tar.gz /debian-rootfs.tar.gz",
-    "",
-  ].join("\n")
-}
+export const EMBEDDED_DAEMON_ASSET = "deskfleet-daemon-linux-arm64.tar.gz"
+export const EMBEDDED_SCRCPY_ASSET = "scrcpy-server.jar"
 
 async function fetchBuffer(url: string): Promise<Buffer> {
   const response = await fetch(url)
@@ -326,32 +289,41 @@ async function downloadDaemonArchive(destination: string, version: string): Prom
   }
 }
 
-export async function stageEmbeddedDebianRootfs(assetsDir: string, version: string): Promise<string> {
+export function repackageDaemonArchive(sourceArchive: string, outputArchive: string): void {
+  const extractDir = mkdtempSync(join(tmpdir(), "deskfleet-daemon-repack-"))
+  try {
+    execFileSync("tar", ["-xzf", sourceArchive, "-C", extractDir], { stdio: "inherit" })
+    rmSync(join(extractDir, "deskfleet-server"), { force: true })
+    if (!existsSync(join(extractDir, "deskfleet-daemon"))) {
+      throw new Error(`Archive ${sourceArchive} does not contain deskfleet-daemon`)
+    }
+    mkdirSync(dirname(outputArchive), { recursive: true })
+    execFileSync("tar", ["-czf", outputArchive, "-C", extractDir, "."], { stdio: "inherit" })
+  } finally {
+    rmSync(extractDir, { recursive: true, force: true })
+  }
+}
+
+export async function stageEmbeddedDaemonAssets(
+  assetsDir: string,
+  version: string,
+): Promise<{ daemonArchive: string; scrcpyJar: string }> {
   mkdirSync(assetsDir, { recursive: true })
   rmSync(join(assetsDir, "ubuntu-rootfs.tar.gz"), { force: true })
-  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-debian-rootfs-"))
+  rmSync(join(assetsDir, "debian-rootfs.tar.gz"), { force: true })
+  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-android-daemon-"))
   try {
-    await downloadDaemonArchive(join(tempRoot, "deskfleet-linux-arm64.tar.gz"), version)
-    writeFileSync(join(tempRoot, "scrcpy-server.jar"), await fetchBuffer(SCRCPY_SERVER_URL))
-    writeFileSync(join(tempRoot, "Dockerfile"), buildEmbeddedRootfsDockerfile(), "utf8")
+    const rawArchive = join(tempRoot, "deskfleet-linux-arm64.tar.gz")
+    await downloadDaemonArchive(rawArchive, version)
+    const daemonArchive = join(assetsDir, EMBEDDED_DAEMON_ASSET)
+    repackageDaemonArchive(rawArchive, daemonArchive)
 
-    if (process.arch !== "arm64") {
-      execFileSync("docker", ["run", "--privileged", "--rm", "tonistiigi/binfmt:latest", "--install", "arm64"], {
-        stdio: "inherit",
-      })
+    const scrcpyJar = join(assetsDir, EMBEDDED_SCRCPY_ASSET)
+    writeFileSync(scrcpyJar, await fetchBuffer(SCRCPY_SERVER_URL))
+    if (!existsSync(daemonArchive) || !existsSync(scrcpyJar)) {
+      throw new Error(`Expected embedded daemon or scrcpy asset was not created under ${assetsDir}`)
     }
-
-    execFileSync(
-      "docker",
-      ["buildx", "build", "--target", "export", "--output", `type=local,dest=${assetsDir}`, tempRoot],
-      { stdio: "inherit" },
-    )
-    rmSync(join(assetsDir, "ubuntu-rootfs.tar.gz"), { force: true })
-    const outputArchive = join(assetsDir, "debian-rootfs.tar.gz")
-    if (!existsSync(outputArchive)) {
-      throw new Error(`Expected embedded Debian rootfs archive was not created at ${outputArchive}`)
-    }
-    return outputArchive
+    return { daemonArchive, scrcpyJar }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
@@ -398,10 +370,10 @@ if (import.meta.main) {
   const prootFiles = await stageTermuxProotBinaries(outDir, readelfBin)
   console.log(`Staged ${targetSo} and ${prootFiles.length} proot binaries (NDK ${basename(ndkRoot)}, API ${MIN_ANDROID_API}, 16 KB aligned)`)
 
-  if (release || process.env.DESKFLEET_ANDROID_BUNDLE_ROOTFS === "1") {
+  if (release || process.env.DESKFLEET_ANDROID_BUNDLE_DAEMON === "1") {
     const webPackageJson = JSON.parse(readFileSync(join(repoRoot, "apps/web/package.json"), "utf8")) as { version: string }
     const assetsDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/assets")
-    const rootfsAsset = await stageEmbeddedDebianRootfs(assetsDir, webPackageJson.version)
-    console.log(`Staged embedded Debian rootfs asset at ${rootfsAsset}`)
+    const staged = await stageEmbeddedDaemonAssets(assetsDir, webPackageJson.version)
+    console.log(`Staged embedded daemon (${staged.daemonArchive}) and scrcpy (${staged.scrcpyJar})`)
   }
 }

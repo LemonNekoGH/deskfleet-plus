@@ -1,16 +1,17 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import {
   buildAndroidViewerEnv,
-  buildEmbeddedRootfsDockerfile,
   extractDebMember,
   findNdkRoot,
   MIN_ANDROID_API,
   MIN_NDK_MAJOR,
   patchCStringInPlace,
+  repackageDaemonArchive,
   verifyElfLoadAlignment,
 } from "./build-android-viewer.ts"
 
@@ -130,19 +131,37 @@ test("extractDebMember extracts a member from an ar archive with even padding", 
   assert.throws(() => extractDebMember(deb, "missing"), /missing/)
 })
 
-test("buildEmbeddedRootfsDockerfile installs deps, daemon, scrcpy, keeps copyrights, and converts hardlinks", () => {
-  const dockerfile = buildEmbeddedRootfsDockerfile()
-  assert.match(dockerfile, /FROM --platform=linux\/arm64 debian:trixie-slim/)
-  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM debian:trixie-slim/)
-  assert.match(dockerfile, /\/debian-rootfs\.tar\.gz/)
-  assert.match(dockerfile, /! -name copyright/)
-  assert.doesNotMatch(dockerfile, /rm -rf.*\/usr\/share\/doc\/\*/)
-  assert.match(dockerfile, /\bca-certificates\b/)
-  assert.match(dockerfile, /\bgit\b/)
-  assert.match(dockerfile, /\bcurl\b/)
-  assert.match(dockerfile, /\badb\b/)
-  assert.match(dockerfile, /deskfleet-daemon/)
-  assert.match(dockerfile, /scrcpy-server\.jar/)
-  assert.match(dockerfile, /rm -f \/opt\/deskfleet\/deskfleet-server/)
-  assert.match(dockerfile, /ln -rsf/)
+test("repackageDaemonArchive strips deskfleet-server and preserves daemon and dsh runtime", context => {
+  const root = mkdtempSync(join(tmpdir(), "deskfleet-daemon-repack-test-"))
+  context.after(() => rmSync(root, { recursive: true, force: true }))
+
+  const srcDir = join(root, "src")
+  mkdirSync(join(srcDir, "dsh"), { recursive: true })
+  writeFileSync(join(srcDir, "deskfleet-server"), "server-bin")
+  writeFileSync(join(srcDir, "deskfleet-daemon"), "daemon-bin")
+  writeFileSync(join(srcDir, "dsh", "entry.js"), "console.log('dsh')\n")
+
+  const inputArchive = join(root, "input.tar.gz")
+  execFileSync("tar", ["-czf", inputArchive, "-C", srcDir, "."])
+
+  const outputArchive = join(root, "out", "deskfleet-daemon-linux-arm64.tar.gz")
+  repackageDaemonArchive(inputArchive, outputArchive)
+
+  const verifyDir = join(root, "verify")
+  mkdirSync(verifyDir, { recursive: true })
+  execFileSync("tar", ["-xzf", outputArchive, "-C", verifyDir])
+
+  assert.equal(existsSync(join(verifyDir, "deskfleet-daemon")), true)
+  assert.equal(existsSync(join(verifyDir, "dsh", "entry.js")), true)
+  assert.equal(existsSync(join(verifyDir, "deskfleet-server")), false)
+
+  const missingDaemonDir = join(root, "missing-daemon")
+  mkdirSync(missingDaemonDir, { recursive: true })
+  writeFileSync(join(missingDaemonDir, "deskfleet-server"), "only-server")
+  const invalidArchive = join(root, "invalid.tar.gz")
+  execFileSync("tar", ["-czf", invalidArchive, "-C", missingDaemonDir, "."])
+  assert.throws(
+    () => repackageDaemonArchive(invalidArchive, join(root, "invalid-out.tar.gz")),
+    /does not contain deskfleet-daemon/,
+  )
 })

@@ -5,11 +5,9 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
-import java.util.zip.GZIPOutputStream
 
 class ProotDaemonManagerTest {
     private val tempDir = Files.createTempDirectory("deskfleet-proot-test").toFile()
@@ -230,17 +228,13 @@ class ProotDaemonManagerTest {
     }
 
     @Test
-    fun ensureProvisionedExtractsBundledRootfsAssetWithoutNetworkOrApt() {
+    fun ensureProvisionedUsesBundledDaemonAndScrcpyAssetsWhileDownloadingRootfs() {
         val baseDir = File(filesDir, "linux")
         val rootfs = File(baseDir, "rootfs")
-        val tarPayload = "fake-tar-payload".toByteArray()
-        val gzippedBytes = ByteArrayOutputStream().apply {
-            GZIPOutputStream(this).use { it.write(tarPayload) }
-        }.toByteArray()
-
+        val downloadedUrls = mutableListOf<String>()
         val invokedCommands = mutableListOf<List<String>>()
         val openedAssets = mutableListOf<String>()
-        var extractedTarSize = -1L
+        var aptGetRan = false
 
         val manager = ProotDaemonManager(
             filesDir = filesDir,
@@ -251,36 +245,60 @@ class ProotDaemonManagerTest {
             runner = object : ProotRunner {
                 override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
                     invokedCommands += invocation.args
-                    if (invocation.args.contains("/system/bin/tar")) {
-                        val xfIdx = invocation.args.indexOf("-xf")
-                        extractedTarSize = File(invocation.args[xfIdx + 1]).length()
-                        File(rootfs, "bin").mkdirs()
-                        File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
-                        File(rootfs, "opt/deskfleet").mkdirs()
-                        File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
-                        File(rootfs, "opt/deskfleet/scrcpy-server.jar").writeText("jar")
-                        return ShellResult(0, "", "")
+                    return when {
+                        invocation.args.contains("/system/bin/tar") -> {
+                            File(rootfs, "bin").mkdirs()
+                            File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
+                            ShellResult(0, "", "")
+                        }
+                        invocation.args.any { it.contains("apt-get") } -> {
+                            aptGetRan = true
+                            ShellResult(0, "", "")
+                        }
+                        invocation.args.any { it.contains("tar -xzf /tmp/deskfleet-linux-arm64.tar.gz") } -> {
+                            assertEquals(
+                                "mock-daemon-tgz",
+                                File(rootfs, "tmp/deskfleet-linux-arm64.tar.gz").readText(),
+                            )
+                            File(rootfs, "opt/deskfleet").mkdirs()
+                            File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
+                            ShellResult(0, "", "")
+                        }
+                        else -> {
+                            fail("Unexpected container command: ${invocation.args}")
+                            ShellResult(1, "", "")
+                        }
                     }
-                    fail("Unexpected container command when bundled asset is used: ${invocation.args}")
-                    return ShellResult(1, "", "")
                 }
             },
             downloader = object : AssetDownloader {
                 override fun download(url: String, destination: File, gunzip: Boolean) {
-                    fail("Unexpected network download when bundled asset is present: $url")
+                    downloadedUrls += url
+                    assertEquals(ProotDaemonManager.DEBIAN_ROOTFS_URL, url)
+                    destination.parentFile?.mkdirs()
+                    destination.writeText("mock-debian-rootfs")
                 }
             },
             assetOpener = EmbeddedAssetOpener { assetName ->
                 openedAssets += assetName
-                if (assetName == ProotDaemonManager.EMBEDDED_ROOTFS_ASSET) ByteArrayInputStream(gzippedBytes) else null
+                when (assetName) {
+                    ProotDaemonManager.EMBEDDED_DAEMON_ASSET -> ByteArrayInputStream("mock-daemon-tgz".toByteArray())
+                    ProotDaemonManager.EMBEDDED_SCRCPY_ASSET -> ByteArrayInputStream("mock-scrcpy-jar".toByteArray())
+                    else -> null
+                }
             },
         )
 
         manager.ensureProvisioned()
 
-        assertEquals(listOf(ProotDaemonManager.EMBEDDED_ROOTFS_ASSET), openedAssets)
-        assertEquals(tarPayload.size.toLong(), extractedTarSize)
-        assertFalse(invokedCommands.any { args -> args.any { it.contains("apt-get") } })
+        assertEquals(listOf(ProotDaemonManager.DEBIAN_ROOTFS_URL), downloadedUrls)
+        assertEquals(
+            listOf(ProotDaemonManager.EMBEDDED_DAEMON_ASSET, ProotDaemonManager.EMBEDDED_SCRCPY_ASSET),
+            openedAssets,
+        )
+        assertTrue(aptGetRan)
+        assertEquals("mock-scrcpy-jar", File(rootfs, "opt/deskfleet/scrcpy-server.jar").readText())
+        assertTrue(File(rootfs, "etc/hosts").isFile)
         assertTrue(File(baseDir, "workspace").isDirectory)
         assertEquals("0.18.2", File(baseDir, "version").readText())
         assertFalse(File(cacheDir, "debian-rootfs.tar").exists())
