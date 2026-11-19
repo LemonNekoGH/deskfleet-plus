@@ -114,7 +114,6 @@ export function buildGuestRootfsDockerfile(version: string): string {
     "  && chmod 0644 /boot/extlinux/extlinux.conf /etc/systemd/system/deskfleet-exec-agent.service \\",
     `  && printf '%s' '${version.replace(/'/g, "'\\''")}' > /opt/deskfleet/.version \\`,
     "  && printf 'deskfleet-ios\\n' > /etc/hostname \\",
-    "  && printf '127.0.0.1 localhost deskfleet-ios\\n::1 localhost\\n' > /etc/hosts \\",
     "  && printf '/dev/nvme0n1p1 / ext4 defaults,noatime 0 1\\n' > /etc/fstab \\",
     "  && printf '[Match]\\nName=en* eth*\\n\\n[Network]\\nDHCP=yes\\n' > /etc/systemd/network/20-rtl8169.network \\",
     "  && mkdir -p /etc/systemd/system/multi-user.target.wants /etc/systemd/system/network-online.target.wants \\",
@@ -347,6 +346,17 @@ export async function buildRiscv64GuestDiskImage(options: {
       ],
       { stdio: "inherit" },
     )
+
+    // Populate /etc/hosts and /etc/resolv.conf outside Docker (Docker bind-mounts /etc/hosts read-only during RUN)
+    rmSync(join(rootfsDir, ".dockerenv"), { force: true })
+    rmSync(join(rootfsDir, "etc/hosts"), { force: true })
+    writeFileSync(join(rootfsDir, "etc/hosts"), "127.0.0.1 localhost deskfleet-ios\n::1 localhost\n", "utf8")
+    rmSync(join(rootfsDir, "etc/resolv.conf"), { force: true })
+    writeFileSync(join(rootfsDir, "etc/resolv.conf"), "nameserver 1.1.1.1\nnameserver 8.8.8.8\n", "utf8")
+    for (const dir of ["dev", "proc", "sys", "tmp", "run"]) {
+      mkdirSync(join(rootfsDir, dir), { recursive: true })
+    }
+    chmodSync(join(rootfsDir, "tmp"), 0o1777)
 
     // Smoke-test the pre-baked riscv64 daemon binary inside the rootfs via qemu-riscv64
     const qemuBin = existsSync("/usr/bin/qemu-riscv64-static") ? "/usr/bin/qemu-riscv64-static" : "qemu-riscv64"
