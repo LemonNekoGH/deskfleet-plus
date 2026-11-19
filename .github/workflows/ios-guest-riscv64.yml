@@ -49,6 +49,8 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
+          rust-cache: riscv64-release
+          rust-cache-save: "true"
 
       - name: Build riscv64 daemon and pre-baked Linux guest image
         run: mise exec -- node scripts/build-ios-riscv64-guest.ts dist/ios-guest-riscv64
