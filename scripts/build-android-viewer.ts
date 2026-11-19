@@ -270,12 +270,14 @@ export const SCRCPY_SERVER_URL = `https://github.com/Genymobile/scrcpy/releases/
 
 export function buildEmbeddedRootfsDockerfile(): string {
   return [
-    "FROM --platform=linux/arm64 ubuntu:24.04 AS rootfs",
+    "FROM --platform=linux/arm64 debian:trixie-slim AS rootfs",
     "ENV DEBIAN_FRONTEND=noninteractive",
     "RUN apt-get update \\",
     "  && apt-get install -y --no-install-recommends ca-certificates git curl adb \\",
     "  && apt-get clean \\",
-    "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*",
+    "  && find /usr/share/doc -mindepth 1 -type f ! -name copyright -delete \\",
+    "  && find /usr/share/doc -mindepth 1 -type d -empty -delete \\",
+    "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*",
     "COPY deskfleet-linux-arm64.tar.gz /tmp/deskfleet-linux-arm64.tar.gz",
     "COPY scrcpy-server.jar /opt/deskfleet/scrcpy-server.jar",
     "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace \\",
@@ -289,7 +291,7 @@ export function buildEmbeddedRootfsDockerfile(): string {
     "  | awk -F'\\t' '$1 == prev { print target \"\\t\" $2; next } { prev = $1; target = $2 }' \\",
     "  | while IFS=\"$TAB\" read -r target link; do ln -rsf \"$target\" \"$link\"; done",
     "",
-    "FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS packager",
+    "FROM --platform=$BUILDPLATFORM debian:trixie-slim AS packager",
     "COPY --from=rootfs / /rootfs",
     "RUN rm -rf /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /rootfs/.dockerenv \\",
     "  && mkdir -p /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /out \\",
@@ -297,10 +299,10 @@ export function buildEmbeddedRootfsDockerfile(): string {
     "  && rm -f /rootfs/etc/resolv.conf /rootfs/etc/hosts \\",
     "  && printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > /rootfs/etc/resolv.conf \\",
     "  && printf '127.0.0.1 localhost\\n::1 localhost\\n' > /rootfs/etc/hosts \\",
-    "  && tar -czf /out/ubuntu-rootfs.tar.gz -C /rootfs .",
+    "  && tar -czf /out/debian-rootfs.tar.gz -C /rootfs .",
     "",
     "FROM scratch AS export",
-    "COPY --from=packager /out/ubuntu-rootfs.tar.gz /ubuntu-rootfs.tar.gz",
+    "COPY --from=packager /out/debian-rootfs.tar.gz /debian-rootfs.tar.gz",
     "",
   ].join("\n")
 }
@@ -324,9 +326,10 @@ async function downloadDaemonArchive(destination: string, version: string): Prom
   }
 }
 
-export async function stageEmbeddedUbuntuRootfs(assetsDir: string, version: string): Promise<string> {
+export async function stageEmbeddedDebianRootfs(assetsDir: string, version: string): Promise<string> {
   mkdirSync(assetsDir, { recursive: true })
-  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-ubuntu-rootfs-"))
+  rmSync(join(assetsDir, "ubuntu-rootfs.tar.gz"), { force: true })
+  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-debian-rootfs-"))
   try {
     await downloadDaemonArchive(join(tempRoot, "deskfleet-linux-arm64.tar.gz"), version)
     writeFileSync(join(tempRoot, "scrcpy-server.jar"), await fetchBuffer(SCRCPY_SERVER_URL))
@@ -343,9 +346,10 @@ export async function stageEmbeddedUbuntuRootfs(assetsDir: string, version: stri
       ["buildx", "build", "--target", "export", "--output", `type=local,dest=${assetsDir}`, tempRoot],
       { stdio: "inherit" },
     )
-    const outputArchive = join(assetsDir, "ubuntu-rootfs.tar.gz")
+    rmSync(join(assetsDir, "ubuntu-rootfs.tar.gz"), { force: true })
+    const outputArchive = join(assetsDir, "debian-rootfs.tar.gz")
     if (!existsSync(outputArchive)) {
-      throw new Error(`Expected embedded Ubuntu rootfs archive was not created at ${outputArchive}`)
+      throw new Error(`Expected embedded Debian rootfs archive was not created at ${outputArchive}`)
     }
     return outputArchive
   } finally {
@@ -397,7 +401,7 @@ if (import.meta.main) {
   if (release || process.env.DESKFLEET_ANDROID_BUNDLE_ROOTFS === "1") {
     const webPackageJson = JSON.parse(readFileSync(join(repoRoot, "apps/web/package.json"), "utf8")) as { version: string }
     const assetsDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/assets")
-    const rootfsAsset = await stageEmbeddedUbuntuRootfs(assetsDir, webPackageJson.version)
-    console.log(`Staged embedded Ubuntu rootfs asset at ${rootfsAsset}`)
+    const rootfsAsset = await stageEmbeddedDebianRootfs(assetsDir, webPackageJson.version)
+    console.log(`Staged embedded Debian rootfs asset at ${rootfsAsset}`)
   }
 }

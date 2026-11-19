@@ -109,7 +109,7 @@ internal object HttpAssetDownloader : AssetDownloader {
 }
 
 /**
- * Provisions and manages an unprivileged Ubuntu Linux container using the
+ * Provisions and manages an unprivileged Debian Linux container using the
  * bundled Termux proot runtime inside the Android app sandbox.
  */
 internal class ProotDaemonManager(
@@ -194,7 +194,7 @@ internal class ProotDaemonManager(
 
         val bundledAsset = assetOpener.open(EMBEDDED_ROOTFS_ASSET)
         if (bundledAsset != null) {
-            val rootfsTar = File(cacheDir, "ubuntu-rootfs.tar")
+            val rootfsTar = File(cacheDir, "debian-rootfs.tar")
             try {
                 bundledAsset.use { raw ->
                     GZIPInputStream(raw).use { gzip ->
@@ -219,9 +219,9 @@ internal class ProotDaemonManager(
         }
 
         if (!shellBin.exists()) {
-            val rootfsTar = File(cacheDir, "ubuntu-rootfs.tar")
+            val rootfsTar = File(cacheDir, "debian-rootfs.tar")
             try {
-                downloadUbuntuRootfs(rootfsTar)
+                downloadDebianRootfs(rootfsTar)
                 extractRootfsTar(rootfsTar, shellBin)
                 prepareRootfsDirectories()
                 runCheckedInProot(
@@ -300,7 +300,7 @@ internal class ProotDaemonManager(
                 val detail = directExtract.stderr.trim()
                     .ifEmpty { prootExtract.stderr.trim() }
                     .ifEmpty { "exit code ${directExtract.exitCode}" }
-                throw IllegalStateException("Failed to extract Ubuntu rootfs: $detail")
+                throw IllegalStateException("Failed to extract Debian rootfs: $detail")
             }
         }
     }
@@ -341,10 +341,10 @@ internal class ProotDaemonManager(
         }
     }
 
-    private fun downloadUbuntuRootfs(destination: File) {
-        val primary = runCatching { downloader.download(UBUNTU_ROOTFS_URL, destination, gunzip = true) }
+    private fun downloadDebianRootfs(destination: File) {
+        val primary = runCatching { downloader.download(DEBIAN_ROOTFS_URL, destination, gunzip = true) }
         if (primary.isSuccess) return
-        downloader.download(UBUNTU_ROOTFS_FALLBACK_URL, destination, gunzip = true)
+        downloader.download(DEBIAN_ROOTFS_FALLBACK_URL, destination, gunzip = true)
     }
 
     private fun downloadDaemonRelease(destination: File) {
@@ -385,9 +385,9 @@ internal class ProotDaemonManager(
     }
 
     companion object {
-        const val EMBEDDED_ROOTFS_ASSET = "ubuntu-rootfs.tar.gz"
-        const val UBUNTU_ROOTFS_URL = "https://partner-images.canonical.com/oci/noble/current/ubuntu-noble-oci-arm64-root.tar.gz"
-        const val UBUNTU_ROOTFS_FALLBACK_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
+        const val EMBEDDED_ROOTFS_ASSET = "debian-rootfs.tar.gz"
+        const val DEBIAN_ROOTFS_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/slim/oci/blobs/rootfs.tar.gz"
+        const val DEBIAN_ROOTFS_FALLBACK_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/oci/blobs/rootfs.tar.gz"
         const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"
 
         internal fun prootBaseEnv(nativeLibraryDir: File, baseDir: File): Map<String, String> = mapOf(

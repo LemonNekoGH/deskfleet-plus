@@ -75,4 +75,4 @@ export DESKFLEET_ANDROID_SCRCPY_SERVER=/root/scrcpy-server-v3.1
 
 1. 安装第三方构建的 **`DeskFleet Plus`** APK（包名 `moe.remon.deskfleet.plus`，与官方 `ai.yetanother.deskfleet` 应用相互独立）。
 2. 登录应用，打开 **添加机器 → 此电脑（本机）** 并确认注册。
-3. 应用会自动在私有沙箱目录内初始化 Ubuntu `arm64` `proot` 容器并下载 `deskfleet-daemon`，通过前台常驻服务与唤醒锁拉起守护进程并自动完成当前团队注册，无需 Root 或手动命令行操作。
+3. 应用会自动在私有沙箱目录内初始化内置的 Debian `arm64` `proot` 容器与 `deskfleet-daemon`，通过前台常驻服务与唤醒锁拉起守护进程并自动完成当前团队注册，无需 Root 或手动命令行操作。
