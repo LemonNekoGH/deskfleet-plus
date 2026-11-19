@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import { test } from "vitest"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
 import { attachAndroidLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
 

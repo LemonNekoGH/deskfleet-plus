@@ -91,6 +91,13 @@ Experiment decisions never grant authorization, subscription entitlements, or
 quota capacity; those remain server and daemon responsibilities. The
 [analytics guide](analytics.md) owns identity, event scope, and configuration.
 
+Google Tag runs in the Web document and in a separate, sandboxed Electron
+`WebContentsView` with a locally handled HTTPS origin. GA4 rejects Electron's
+custom application protocol. The application renderer retains consent, identity,
+and event ownership; a main-frame-only IPC bridge relays tag commands to this
+isolated host without exposing application APIs to Google scripts. Revoking
+consent or losing the owner document destroys the host and its pending commands.
+
 Optional Sentry error reporting also belongs to the shared Vue frontend. Web
 and Electron renderers use a build-time public DSN; an absent or invalid DSN
 disables reporting. Each renderer captures Vue and unhandled JavaScript errors,
@@ -211,6 +218,17 @@ machine is offline; unchanged online machines still refresh after reconciliation
 Roster reads started before a signaling connection change are discarded. This
 reconciliation preserves already authorized peers and their live streams.
 
+A known signaling recovery immediately marks the client connection untrusted,
+including while a resume ping is pending. New machine RPCs and local or WebRTC
+peer creation require a live signaling connection and a fresh online machine
+roster from the current account/recovery generation. Concurrent operations share
+one roster read per Team; another recovery, account replacement, disposal, or a
+Team presence change invalidates it. Admission is checked again immediately
+before the host fetch, after both CSRF acquisition and HTTP library preparation.
+This gate does not replay writes, revoke authorized peers, or block account and
+catalog reads. An online snapshot cannot prevent the daemon going offline after
+the read.
+
 Browser and installed-PWA pages suspend timers while hidden, so heartbeat ticks
 alone cannot time out a stale socket. Heartbeat traffic is skipped while the
 page is hidden. Returning to a visible page, restoring a page from the
@@ -220,7 +238,13 @@ replaces it only when the 10-second round trip misses. The native foreground
 event covers a process switch that leaves the WebView visible and emits neither
 `visibilitychange` nor `pageshow`. A socket idle beyond the 60-second deadline
 is replaced immediately, and a pending retry is executed without waiting for
-its backoff.
+its backoff. Only a persisted `pageshow` (back/forward-cache restore) enters
+recovery; the initial page load must not invalidate startup admission or roster
+reads. Electron's main-process client takes the same recovery path on
+power resume and a window focus following blur; it does not depend on renderer
+DOM events. Initial focus and repeated focus without an intervening blur leave
+admission unchanged. An actual blur/focus transition between app windows still
+conservatively triggers recovery.
 
 Each daemon signaling socket also reconciles its peer grants from PostgreSQL at
 its 20-second heartbeat. If a revocation commits but its broadcast is lost, the
@@ -859,7 +883,9 @@ opening its local resource; integer local IDs do not identify resources across
 machines. Closing the account, changing Teams, or removing a Machine releases
 the affected scopes and connections. The UI displays synchronized history
 while a machine is offline and attaches through WebRTC for remote live Agent,
-Git, and terminal operations. The local transport below replaces
+Git, and terminal operations. The desktop client can also open an individual
+Session in a focused standalone window (singleton per Team, Machine, and
+Session) without the workspace sidebar. The local transport below replaces
 WebRTC for those messages when Electron operates its own machine.
 The working directory remains separate from terminal
 ownership. Failed Session provisioning remains visible without a fabricated
@@ -933,6 +959,13 @@ daemon consumers use that directory. Standalone headless daemons default to
 ignores that environment variable and does not import data from the headless
 directory.
 
+On Linux and Windows default profiles, the desktop host stores Session
+attachments and default Session worktrees under
+`$XDG_DATA_HOME/deskfleet/daemon` (or `~/.local/share/deskfleet/daemon`) and
+`%LOCALAPPDATA%\deskfleet\daemon`. This layout keeps agent files outside
+configuration directories that terminal sandboxes block. Profiles started with
+`--user-data-dir` keep all files inside `<userData>/daemon`.
+
 Desktop first-run setup uses a welcome page: account sign-in, a choice to allow
 control of this machine, then permissions for the selected capabilities. The
 choice uses the same setting as Preferences. Declining stops the local daemon
@@ -943,8 +976,11 @@ Enabling starts or reuses the local Agent, then macOS guides Full Disk Access,
 screen/system-audio recording, and Accessibility. Windows offers optional remote
 control while locked. Linux Wayland guides screen sharing and keyboard/mouse
 control through its desktop authorization dialog. Linux X11 checks access to the
-existing X server and skips Portal permission steps. Linux has no Full Disk
-Access or macOS System Settings instructions.
+existing X server and skips Portal permission steps. Linux also guides AUV's own
+screen and input authorization on every backend, because its Portal requests need
+AUV's installed desktop identity. macOS and Windows need no separate AUV step;
+their AUV backends use the executable's existing TCC and Windows input grants.
+Linux has no Full Disk Access or macOS System Settings instructions.
 
 The host saves the current step and a `machine-control` flow marker in
 `onboarding.json` under its user-data directory and resumes it after restart.
@@ -958,8 +994,25 @@ the daemon. A profile with an existing account or desktop settings but no welcom
 file is treated as finished and retains its startup preference. Completed setup
 is not repeated. macOS retains permission guidance when an enabled Agent fails
 to start. Linux preserves a saved Portal step while disconnected; when a later
-hello identifies X11, the host completes the now-unneeded permission guide.
-Users can defer individual permissions without blocking unrelated Agent work.
+hello identifies X11, the host keeps AUV's applicable step and drops the
+now-unneeded Portal guide. Users can defer individual permissions without
+blocking unrelated Agent work.
+
+AUV authorization belongs to the Linux desktop host, separate from daemon
+permission events. At startup the host runs metadata-only `doctor --portal-setup`
+before exposing the bundled binary, then logs and tolerates failure so unrelated
+Agent work still starts. Welcome and Settings → Permissions invoke
+`doctor --portal-setup --portal-authorize --json` only on an explicit
+authorization action; entry, focus, and refresh use the silent `doctor --json`
+diagnostics. Authorization installs AUV's desktop identity and requests its own
+screen and input grants. Ordinary local AUV CLI and MCP operations share the
+default user Portal state across worktrees. No token is copied into Team catalogs
+or renderer state. The UI reports saved authorization from identity and restore
+records rather than asserting a live grant. Revocation, unsupported persistence,
+and AUV's separate clipboard consent can still require a later prompt. The app
+owns and aborts pending doctor helpers on quit; completed welcome progress
+remains complete. macOS and Windows construct no AUV controller, add no welcome
+step, and spawn no doctor command.
 
 Local Network access belongs to the desktop client, independently of its local
 Agent. Its welcome action calls a Rust native helper in Electron's main process.
