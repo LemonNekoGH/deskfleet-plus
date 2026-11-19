@@ -4,9 +4,12 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.zip.GZIPOutputStream
 
 class ProotDaemonManagerTest {
     private val tempDir = Files.createTempDirectory("deskfleet-proot-test").toFile()
@@ -40,6 +43,7 @@ class ProotDaemonManagerTest {
         assertTrue(invocation.args.contains("-0"))
         assertTrue(invocation.args.contains(File(baseDir, "rootfs").absolutePath))
         assertTrue(invocation.args.contains("${File(baseDir, "data").absolutePath}:/var/lib/deskfleet"))
+        assertTrue(invocation.args.contains("${File(baseDir, "workspace").absolutePath}:/root/workspace"))
         assertTrue(invocation.args.contains("DESKFLEET_DAEMON_DIRECTORY=/var/lib/deskfleet"))
         assertTrue(invocation.args.contains("DESKFLEET_ANDROID_SCRCPY_SERVER=/opt/deskfleet/scrcpy-server.jar"))
         assertTrue(invocation.args.contains("DESKFLEET_ANDROID_SCRCPY_VERSION=3.1"))
@@ -223,5 +227,62 @@ class ProotDaemonManagerTest {
         assertFalse(Files.isSymbolicLink(resolvFile.toPath()))
         assertTrue(resolvFile.isFile)
         assertEquals("nameserver 1.1.1.1\nnameserver 8.8.8.8\n", resolvFile.readText())
+    }
+
+    @Test
+    fun ensureProvisionedExtractsBundledRootfsAssetWithoutNetworkOrApt() {
+        val baseDir = File(filesDir, "linux")
+        val rootfs = File(baseDir, "rootfs")
+        val tarPayload = "fake-tar-payload".toByteArray()
+        val gzippedBytes = ByteArrayOutputStream().apply {
+            GZIPOutputStream(this).use { it.write(tarPayload) }
+        }.toByteArray()
+
+        val invokedCommands = mutableListOf<List<String>>()
+        val openedAssets = mutableListOf<String>()
+        var extractedTarSize = -1L
+
+        val manager = ProotDaemonManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            nativeLibraryDir = nativeDir,
+            versionName = "0.18.2",
+            fallbackMachineName = "Phone",
+            runner = object : ProotRunner {
+                override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+                    invokedCommands += invocation.args
+                    if (invocation.args.contains("/system/bin/tar")) {
+                        val xfIdx = invocation.args.indexOf("-xf")
+                        extractedTarSize = File(invocation.args[xfIdx + 1]).length()
+                        File(rootfs, "bin").mkdirs()
+                        File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
+                        File(rootfs, "opt/deskfleet").mkdirs()
+                        File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
+                        File(rootfs, "opt/deskfleet/scrcpy-server.jar").writeText("jar")
+                        return ShellResult(0, "", "")
+                    }
+                    fail("Unexpected container command when bundled asset is used: ${invocation.args}")
+                    return ShellResult(1, "", "")
+                }
+            },
+            downloader = object : AssetDownloader {
+                override fun download(url: String, destination: File, gunzip: Boolean) {
+                    fail("Unexpected network download when bundled asset is present: $url")
+                }
+            },
+            assetOpener = EmbeddedAssetOpener { assetName ->
+                openedAssets += assetName
+                if (assetName == ProotDaemonManager.EMBEDDED_ROOTFS_ASSET) ByteArrayInputStream(gzippedBytes) else null
+            },
+        )
+
+        manager.ensureProvisioned()
+
+        assertEquals(listOf(ProotDaemonManager.EMBEDDED_ROOTFS_ASSET), openedAssets)
+        assertEquals(tarPayload.size.toLong(), extractedTarSize)
+        assertFalse(invokedCommands.any { args -> args.any { it.contains("apt-get") } })
+        assertTrue(File(baseDir, "workspace").isDirectory)
+        assertEquals("0.18.2", File(baseDir, "version").readText())
+        assertFalse(File(cacheDir, "ubuntu-rootfs.tar").exists())
     }
 }

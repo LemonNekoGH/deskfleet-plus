@@ -5,6 +5,7 @@ import { join } from "node:path"
 import test from "node:test"
 import {
   buildAndroidViewerEnv,
+  buildEmbeddedRootfsDockerfile,
   extractDebMember,
   findNdkRoot,
   MIN_ANDROID_API,
@@ -127,4 +128,17 @@ test("extractDebMember extracts a member from an ar archive with even padding", 
   assert.deepEqual(extractDebMember(deb, "data.tar.xz"), Buffer.from("xz-bytes"))
   assert.deepEqual(extractDebMember(deb, "odd"), Buffer.from("abc"))
   assert.throws(() => extractDebMember(deb, "missing"), /missing/)
+})
+
+test("buildEmbeddedRootfsDockerfile installs deps, daemon, scrcpy, and converts hardlinks", () => {
+  const dockerfile = buildEmbeddedRootfsDockerfile()
+  assert.match(dockerfile, /FROM --platform=linux\/arm64 ubuntu:24\.04/)
+  assert.match(dockerfile, /\bca-certificates\b/)
+  assert.match(dockerfile, /\bgit\b/)
+  assert.match(dockerfile, /\bcurl\b/)
+  assert.match(dockerfile, /\badb\b/)
+  assert.match(dockerfile, /deskfleet-daemon/)
+  assert.match(dockerfile, /scrcpy-server\.jar/)
+  assert.match(dockerfile, /rm -f \/opt\/deskfleet\/deskfleet-server/)
+  assert.match(dockerfile, /ln -rsf/)
 })
