@@ -201,8 +201,15 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         }
     }
 
+    private var isJitReadyForColdStart: Bool {
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
+            return rvvm_host_is_traced()
+        }
+        return rvvm_host_check_jit_enabled()
+    }
+
     @objc private func activateJitTapped() {
-        if rvvm_host_check_jit_enabled() {
+        if isJitReadyForColdStart {
             finish(.success(()))
             return
         }
@@ -219,7 +226,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         ) { [weak self] success, errorMessage in
             DispatchQueue.main.async {
                 guard let self, !self.completed else { return }
-                if success && rvvm_host_check_jit_enabled() {
+                if success && self.isJitReadyForColdStart {
                     self.finish(.success(()))
                 } else if !success {
                     helperFailure = errorMessage ?? "JIT helper failed"
@@ -229,11 +236,12 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         }
 
         // On iOS 26+, StikJIT's universal script keeps the helper request open until librvvm
-        // allocates JIT caches and invokes rvvm_ios_jit_detach(), so poll csops(CS_DEBUGGED).
+        // allocates JIT caches and invokes rvvm_ios_jit_detach(), so poll P_TRACED (or CS_DEBUGGED
+        // on iOS 17.4-18).
         let deadline = Date().addingTimeInterval(20.0)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             while Date() < deadline {
-                if rvvm_host_check_jit_enabled() {
+                if self?.isJitReadyForColdStart == true {
                     DispatchQueue.main.async {
                         self?.finish(.success(()))
                     }
