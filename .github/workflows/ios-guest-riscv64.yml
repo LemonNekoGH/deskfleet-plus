@@ -1,6 +1,10 @@
 name: iOS RISC-V 64 Guest Image
 
 on:
+  push:
+    paths:
+      - scripts/build-ios-riscv64-guest.ts
+      - .github/workflows/ios-guest-riscv64.yml
   workflow_dispatch:
     inputs:
       publish_release:
@@ -61,10 +65,10 @@ jobs:
           retention-days: 14
 
       - name: Publish pre-baked guest image to fork GitHub Release
-        if: ${{ inputs.publish_release }}
+        if: ${{ github.event_name == 'push' || inputs.publish_release }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag || 'ios-guest-riscv64' }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" \
