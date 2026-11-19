@@ -35,7 +35,8 @@ let package = Package(
             path: "ios/Sources/RvvmRuntime",
             publicHeadersPath: "include",
             linkerSettings: [
-                .linkedFramework("Foundation")
+                .linkedFramework("Foundation"),
+                .linkedLibrary("z")
             ]
         ),
         .target(

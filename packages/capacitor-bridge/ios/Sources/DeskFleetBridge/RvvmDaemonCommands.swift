@@ -8,6 +8,7 @@ internal enum RvvmDaemonCommands {
     static let daemonPidFile = "/run/deskfleet-daemon.pid"
     static let daemonLogFile = "/var/log/deskfleet-daemon.log"
     static let daemonReleaseAsset = "deskfleet-linux-riscv64.tar.gz"
+    static let guestDiskArchiveAsset = "deskfleet-riscv64.img.gz"
 
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
@@ -61,14 +62,18 @@ internal enum RvvmDaemonCommands {
         """
     }
 
-    /// Installs or refreshes /opt/deskfleet/deskfleet-daemon (riscv64) inside the Linux guest.
+    /// Ensures /opt/deskfleet/deskfleet-daemon (riscv64) exists inside the Linux guest.
+    /// Uses the pre-baked binary when already present in the guest image, falling back to
+    /// downloading deskfleet-linux-riscv64.tar.gz if missing.
     static func provisionDaemonCommand(releaseUrl: String, versionName: String) -> String {
         let versionFile = "/opt/deskfleet/.version"
         return """
         set -eu
         mkdir -p /opt/deskfleet /var/lib/deskfleet /var/log /run
-        if [ -x \(shellQuote(daemonBinaryPath)) ] && [ -f \(shellQuote(versionFile)) ] && [ "$(cat \(shellQuote(versionFile)))" = \(shellQuote(versionName)) ]; then
-          exit 0
+        if [ -x \(shellQuote(daemonBinaryPath)) ]; then
+          if [ ! -f \(shellQuote(versionFile)) ] || [ "$(cat \(shellQuote(versionFile)))" = \(shellQuote(versionName)) ]; then
+            exit 0
+          fi
         fi
         tmp_archive="/tmp/deskfleet-daemon-riscv64.tar.gz"
         if command -v curl >/dev/null 2>&1; then
