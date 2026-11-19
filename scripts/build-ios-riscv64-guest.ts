@@ -34,7 +34,11 @@ export function buildDaemonWrapperScript(): string {
   return [
     "#!/bin/sh",
     'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
-    'exec "$DIR/node" "$DIR/daemon.cjs" "$@"',
+    'case " ${NODE_OPTIONS:-} " in',
+    '  *" --jitless "*) ;;',
+    '  *) export NODE_OPTIONS="--jitless${NODE_OPTIONS:+ $NODE_OPTIONS}" ;;',
+    "esac",
+    'exec "$DIR/node" --jitless "$DIR/daemon.cjs" "$@"',
     "",
   ].join("\n")
 }
@@ -60,6 +64,7 @@ export function buildExecAgentScript(): string {
     'DEV="/dev/ttyS1"',
     'stty -F "$DEV" raw -echo -icrnl -onlcr 115200 2>/dev/null || true',
     'exec 3<>"$DEV"',
+    'printf \'\\n\' >&3',
     "while IFS=' ' read -r req_id req_len <&3; do",
     '  [ -z "$req_id" ] && continue',
     '  case "$req_len" in',
@@ -73,7 +78,7 @@ export function buildExecAgentScript(): string {
     "  rc=$?",
     "  set -e",
     '  out_len=$(wc -c <"$out_file" | tr -d \' \')',
-    '  printf \'%s %s %s\\n\' "$req_id" "$rc" "$out_len" >&3',
+    '  printf \'\\n%s %s %s\\n\' "$req_id" "$rc" "$out_len" >&3',
     '  cat "$out_file" >&3',
     '  rm -f "$cmd_file" "$out_file"',
     "done",

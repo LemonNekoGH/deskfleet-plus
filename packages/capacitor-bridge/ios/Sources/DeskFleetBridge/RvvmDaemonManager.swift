@@ -270,7 +270,7 @@ internal final class RvvmDaemonManager {
         var lastError: Error?
         while Date() < deadline {
             do {
-                let pong = try execInGuest("printf 'ready'", timeoutSeconds: 3)
+                let pong = try execInGuest("printf 'ready\\n'\n", timeoutSeconds: 3)
                 if pong.trimmingCharacters(in: .whitespacesAndNewlines) == "ready" {
                     stateLock.lock()
                     guestReady = true
