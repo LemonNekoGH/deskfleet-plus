@@ -7,7 +7,7 @@ import UIKit
 /// on iOS, mirroring Android's ProotDaemonManager contract.
 internal final class RvvmDaemonManager {
     private static let appGroupId = "group.ai.yetanother.deskfleet"
-    private static let defaultDaemonReleaseBase = "https://github.com/yet-another-ai/deskfleet/releases/latest/download"
+    private static let defaultForkReleaseBase = "https://github.com/LemonNekoGH/deskfleet-plus/releases/download/ios-guest-riscv64"
     private static let defaultMemoryBytes: Int = 512 * 1024 * 1024
     private static let defaultVcpuCount: Int = 2
     private static let defaultJitCacheBytes: Int = 32 * 1024 * 1024
@@ -238,11 +238,19 @@ internal final class RvvmDaemonManager {
         try waitForGuestExecAgent(timeoutSeconds: 90)
     }
 
+    private func guestReleaseBaseURL() -> String {
+        for key in ["DeskFleetGuestImageBaseURL", "DeskFleetDaemonReleaseBaseURL"] {
+            if let configured = (Bundle.main.object(forInfoDictionaryKey: key) as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !configured.isEmpty {
+                return configured.hasSuffix("/") ? String(configured.dropLast()) : configured
+            }
+        }
+        return Self.defaultForkReleaseBase
+    }
+
     private func ensureGuestDaemonProvisioned() throws {
-        let releaseBase = (Bundle.main.object(forInfoDictionaryKey: "DeskFleetDaemonReleaseBaseURL") as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = (releaseBase?.isEmpty == false) ? releaseBase! : Self.defaultDaemonReleaseBase
-        let releaseUrl = "\(base)/\(RvvmDaemonCommands.daemonReleaseAsset)"
+        let releaseUrl = "\(guestReleaseBaseURL())/\(RvvmDaemonCommands.daemonReleaseAsset)"
         let script = RvvmDaemonCommands.provisionDaemonCommand(releaseUrl: releaseUrl, versionName: versionName)
         _ = try execInGuest(script, timeoutSeconds: 180)
         _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(), timeoutSeconds: 20)
@@ -457,14 +465,91 @@ internal final class RvvmDaemonManager {
                 return path
             }
         }
-        throw NSError(
-            domain: "RvvmDaemonManager",
-            code: 21,
-            userInfo: [
-                NSLocalizedDescriptionKey:
-                    "Missing riscv64 Linux disk image at Documents/VM/deskfleet-riscv64.img. Place a bootable riscv64 Ubuntu/Debian image with deskfleet-exec-agent.service in Files → DeskFleet → VM.",
-            ]
-        )
+        return try downloadPrebakedGuestDiskImage()
+    }
+
+    private func downloadPrebakedGuestDiskImage() throws -> URL {
+        let targetURL = vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img")
+        let partURL = vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img.part")
+        let downloadURLString = "\(guestReleaseBaseURL())/\(RvvmDaemonCommands.guestDiskArchiveAsset)"
+        guard let remoteURL = URL(string: downloadURLString) else {
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 21,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid guest image download URL: \(downloadURLString)"]
+            )
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var downloadedTempURL: URL?
+        var downloadError: Error?
+
+        let task = URLSession.shared.downloadTask(with: remoteURL) { location, response, error in
+            defer { semaphore.signal() }
+            if let error {
+                downloadError = error
+                return
+            }
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                downloadError = NSError(
+                    domain: "RvvmDaemonManager",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to download \(RvvmDaemonCommands.guestDiskArchiveAsset): HTTP \(http.statusCode)"]
+                )
+                return
+            }
+            guard let location else {
+                downloadError = NSError(
+                    domain: "RvvmDaemonManager",
+                    code: 22,
+                    userInfo: [NSLocalizedDescriptionKey: "Empty download location for \(RvvmDaemonCommands.guestDiskArchiveAsset)"]
+                )
+                return
+            }
+            let stagingGz = self.vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img.gz.download")
+            try? FileManager.default.removeItem(at: stagingGz)
+            do {
+                try FileManager.default.moveItem(at: location, to: stagingGz)
+                downloadedTempURL = stagingGz
+            } catch {
+                downloadError = error
+            }
+        }
+        task.resume()
+        semaphore.wait()
+
+        if let downloadError {
+            throw downloadError
+        }
+        guard let gzURL = downloadedTempURL else {
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 23,
+                userInfo: [NSLocalizedDescriptionKey: "Unable to stage downloaded guest disk image"]
+            )
+        }
+        defer { try? FileManager.default.removeItem(at: gzURL) }
+        try? FileManager.default.removeItem(at: partURL)
+
+        var errBuf = [CChar](repeating: 0, count: 512)
+        let ok = gzURL.path.withCString { srcCStr in
+            partURL.path.withCString { dstCStr in
+                rvvm_host_gunzip_file(srcCStr, dstCStr, &errBuf, errBuf.count)
+            }
+        }
+        guard ok else {
+            try? FileManager.default.removeItem(at: partURL)
+            let errText = String(cString: errBuf)
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 24,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to decompress guest disk image: \(errText)"]
+            )
+        }
+
+        try? FileManager.default.removeItem(at: targetURL)
+        try FileManager.default.moveItem(at: partURL, to: targetURL)
+        return targetURL
     }
 
     private func withOptionalCString<R>(_ string: String?, _ body: (UnsafePointer<CChar>?) -> R) -> R {

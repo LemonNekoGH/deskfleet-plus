@@ -12,6 +12,7 @@
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #define RVVM_STATIC 1
 #include <rvvm/rvvm.h>
@@ -506,4 +507,96 @@ void rvvm_host_stop(rvvm_host_vm_t* vm) {
         vm->channel = NULL;
     }
     free(vm);
+}
+
+static bool buffer_is_all_zero(const uint8_t* buf, size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        if (buf[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len) {
+    if (!src_gz_path || !dst_raw_path) {
+        set_error(error_buf, error_buf_len, "Invalid gunzip file paths");
+        return false;
+    }
+
+    gzFile gz = gzopen(src_gz_path, "rb");
+    if (!gz) {
+        set_error(error_buf, error_buf_len, "Failed to open gzip guest image");
+        return false;
+    }
+    gzbuffer(gz, 256 * 1024);
+
+    int out_fd = open(dst_raw_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (out_fd < 0) {
+        gzclose(gz);
+        set_error(error_buf, error_buf_len, "Failed to create destination guest disk image");
+        return false;
+    }
+
+    const size_t chunk_size = 256 * 1024;
+    uint8_t*     buf        = (uint8_t*)malloc(chunk_size);
+    if (!buf) {
+        close(out_fd);
+        gzclose(gz);
+        set_error(error_buf, error_buf_len, "Out of memory allocating gunzip buffer");
+        return false;
+    }
+
+    off_t total_written = 0;
+    bool  ok            = true;
+    while (true) {
+        int n = gzread(gz, buf, (unsigned int)chunk_size);
+        if (n < 0) {
+            int         zerr = 0;
+            const char* zmsg = gzerror(gz, &zerr);
+            set_error(error_buf, error_buf_len, zmsg ? zmsg : "zlib read error");
+            ok = false;
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        // Preserve APFS sparse holes for all-zero blocks to keep guest image footprint small.
+        if (buffer_is_all_zero(buf, (size_t)n)) {
+            if (lseek(out_fd, (off_t)n, SEEK_CUR) < 0) {
+                set_error(error_buf, error_buf_len, "Failed to seek sparse hole in guest disk image");
+                ok = false;
+                break;
+            }
+        } else {
+            size_t offset = 0;
+            while (offset < (size_t)n) {
+                ssize_t w = write(out_fd, buf + offset, (size_t)n - offset);
+                if (w <= 0) {
+                    set_error(error_buf, error_buf_len, "Failed writing guest disk image");
+                    ok = false;
+                    break;
+                }
+                offset += (size_t)w;
+            }
+            if (!ok) {
+                break;
+            }
+        }
+        total_written += (off_t)n;
+    }
+
+    if (ok && ftruncate(out_fd, total_written) != 0) {
+        set_error(error_buf, error_buf_len, "Failed finalizing guest disk image size");
+        ok = false;
+    }
+
+    free(buf);
+    close(out_fd);
+    int close_rc = gzclose(gz);
+    if (ok && close_rc != Z_OK) {
+        set_error(error_buf, error_buf_len, "gzip stream integrity check failed");
+        ok = false;
+    }
+    return ok;
 }

@@ -1,0 +1,82 @@
+name: iOS RISC-V 64 Guest Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish deskfleet-riscv64.img.gz to a GitHub Release on this fork
+        type: boolean
+        default: true
+      release_tag:
+        description: Release tag for pre-baked iOS RISC-V 64 guest image
+        type: string
+        default: ios-guest-riscv64
+
+permissions:
+  contents: write
+
+jobs:
+  build-riscv64-guest:
+    name: Build pre-baked RISC-V 64 guest image
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install RISC-V cross-compiler and image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            e2fsprogs qemu-user-static xz-utils
+
+      - name: Register RISC-V binfmt for Docker Buildx
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: riscv64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Build riscv64 daemon and pre-baked Linux guest image
+        run: mise exec -- node scripts/build-ios-riscv64-guest.ts dist/ios-guest-riscv64
+
+      - name: Upload guest image artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: deskfleet-ios-guest-riscv64
+          path: |
+            dist/ios-guest-riscv64/deskfleet-riscv64.img.gz
+            dist/ios-guest-riscv64/deskfleet-linux-riscv64.tar.gz
+            dist/ios-guest-riscv64/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish pre-baked guest image to fork GitHub Release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              dist/ios-guest-riscv64/deskfleet-riscv64.img.gz \
+              dist/ios-guest-riscv64/deskfleet-linux-riscv64.tar.gz \
+              dist/ios-guest-riscv64/SHA256SUMS.txt \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              dist/ios-guest-riscv64/deskfleet-riscv64.img.gz \
+              dist/ios-guest-riscv64/deskfleet-linux-riscv64.tar.gz \
+              dist/ios-guest-riscv64/SHA256SUMS.txt \
+              --title "iOS RISC-V 64 Pre-baked Guest Image" \
+              --notes "Pre-baked Ubuntu 24.04 riscv64 Linux disk image containing deskfleet-daemon and UART1 exec agent for librvvm on iOS."
+          fi
