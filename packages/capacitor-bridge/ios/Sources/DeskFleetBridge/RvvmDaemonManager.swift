@@ -110,8 +110,21 @@ internal final class RvvmDaemonManager {
         try ensureGuestDaemonProvisioned()
     }
 
+    private func isJitReadyForColdStart() -> Bool {
+        // On iOS 26+ (TXM devices like iPhone 17 Pro), CS_DEBUGGED alone (e.g. from devicectl
+        // --console) is NOT enough for vma_multi_mmap: an attached TXM brk #0xf00d debugger
+        // (P_TRACED == true) is required before librvvm prepares its RX JIT caches.
+        if ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 {
+            return rvvm_host_is_traced()
+        }
+        return rvvm_host_check_jit_enabled()
+    }
+
     private func ensureJitEnabled(presenterProvider: @escaping () -> UIViewController?) throws {
-        if rvvm_host_check_jit_enabled() {
+        stateLock.lock()
+        let alreadyRunning = (vmHandle != nil && rvvm_host_is_running(vmHandle))
+        stateLock.unlock()
+        if alreadyRunning || isJitReadyForColdStart() {
             return
         }
 
@@ -129,7 +142,7 @@ internal final class RvvmDaemonManager {
 
             let quickDeadline = Date().addingTimeInterval(6.0)
             while Date() < quickDeadline {
-                if rvvm_host_check_jit_enabled() {
+                if isJitReadyForColdStart() {
                     return
                 }
                 Thread.sleep(forTimeInterval: 0.15)
@@ -164,7 +177,7 @@ internal final class RvvmDaemonManager {
         semaphore.wait()
         try setupResult.get()
 
-        guard rvvm_host_check_jit_enabled() else {
+        guard isJitReadyForColdStart() else {
             throw NSError(
                 domain: "RvvmDaemonManager",
                 code: 11,
