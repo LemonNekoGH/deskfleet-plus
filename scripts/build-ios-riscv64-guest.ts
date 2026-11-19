@@ -16,7 +16,6 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs"
-import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pipeline } from "node:stream/promises"
@@ -29,6 +28,15 @@ export const MBR_PARTITION_START_SECTOR = 2048 // 1 MiB alignment
 export function nodeRiscv64DownloadUrl(nodeVersion: string = process.version): string {
   const normalized = nodeVersion.startsWith("v") ? nodeVersion : `v${nodeVersion}`
   return `https://unofficial-builds.nodejs.org/download/release/${normalized}/node-${normalized}-linux-riscv64.tar.xz`
+}
+
+export function buildDaemonWrapperScript(): string {
+  return [
+    "#!/bin/sh",
+    'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
+    'exec "$DIR/node" "$DIR/daemon.cjs" "$@"',
+    "",
+  ].join("\n")
 }
 
 export function buildExtlinuxConf(): string {
@@ -105,13 +113,13 @@ export function buildGuestRootfsDockerfile(version: string): string {
     "  && ln -sf \"$(ls /boot/initrd.img-* | sort -V | tail -n 1)\" /boot/initrd.img \\",
     "  && apt-get clean \\",
     "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*",
-    "COPY deskfleet-daemon /opt/deskfleet/deskfleet-daemon",
+    "COPY daemon/ /opt/deskfleet/",
     "COPY extlinux.conf /boot/extlinux/extlinux.conf",
     "COPY deskfleet-exec-agent.sh /usr/local/bin/deskfleet-exec-agent.sh",
     "COPY deskfleet-exec-agent.service /etc/systemd/system/deskfleet-exec-agent.service",
     "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace /etc/systemd/network \\",
-    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon /usr/local/bin/deskfleet-exec-agent.sh \\",
-    "  && chmod 0644 /boot/extlinux/extlinux.conf /etc/systemd/system/deskfleet-exec-agent.service \\",
+    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon /opt/deskfleet/node /usr/local/bin/deskfleet-exec-agent.sh \\",
+    "  && chmod 0644 /opt/deskfleet/daemon.cjs /opt/deskfleet/deskfleet.node /boot/extlinux/extlinux.conf /etc/systemd/system/deskfleet-exec-agent.service \\",
     `  && printf '%s' '${version.replace(/'/g, "'\\''")}' > /opt/deskfleet/.version \\`,
     "  && printf 'deskfleet-ios\\n' > /etc/hostname \\",
     "  && printf '/dev/nvme0n1p1 / ext4 defaults,noatime 0 1\\n' > /etc/fstab \\",
@@ -119,7 +127,11 @@ export function buildGuestRootfsDockerfile(version: string): string {
     "  && mkdir -p /etc/systemd/system/multi-user.target.wants /etc/systemd/system/network-online.target.wants \\",
     "  && ln -sf /etc/systemd/system/deskfleet-exec-agent.service /etc/systemd/system/multi-user.target.wants/deskfleet-exec-agent.service \\",
     "  && ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service \\",
-    "  && ln -sf /usr/lib/systemd/system/systemd-resolved.service /etc/systemd/system/multi-user.target.wants/systemd-resolved.service",
+    "  && ln -sf /usr/lib/systemd/system/systemd-resolved.service /etc/systemd/system/multi-user.target.wants/systemd-resolved.service \\",
+    "  && /opt/deskfleet/node --version \\",
+    "  && status_json=\"$(HOME=/tmp XDG_CONFIG_HOME=/tmp XDG_DATA_HOME=/tmp /opt/deskfleet/deskfleet-daemon status)\" \\",
+    "  && echo \"Verified pre-baked riscv64 daemon status: $status_json\" \\",
+    "  && echo \"$status_json\" | grep -q '\"registrations\"'",
     "",
     "FROM scratch AS export",
     "COPY --from=rootfs / /",
@@ -142,21 +154,18 @@ export function writeMbrPartitionTable(
     throw new Error(`Invalid MBR partition sector count: ${sectorCount}`)
   }
   const mbr = Buffer.alloc(sectorSize, 0)
-  // Disk signature
   mbr.writeUInt32LE(0xdf_20_26_01, 440)
-  // Partition entry 1 at offset 446 (16 bytes)
   const entry = 446
   mbr[entry + 0] = 0x80 // Bootable (required by U-Boot distro_bootcmd)
-  mbr[entry + 1] = 0xfe // CHS start (LBA-addressed)
+  mbr[entry + 1] = 0xfe
   mbr[entry + 2] = 0xff
   mbr[entry + 3] = 0xff
   mbr[entry + 4] = 0x83 // Linux native ext4
-  mbr[entry + 5] = 0xfe // CHS end
+  mbr[entry + 5] = 0xfe
   mbr[entry + 6] = 0xff
   mbr[entry + 7] = 0xff
   mbr.writeUInt32LE(startSector >>> 0, entry + 8)
   mbr.writeUInt32LE(sectorCount >>> 0, entry + 12)
-  // MBR boot signature
   mbr[510] = 0x55
   mbr[511] = 0xaa
 
@@ -187,12 +196,17 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
   writeFileSync(destPath, payload)
 }
 
-export async function buildRiscv64SeaDaemon(
+/**
+ * Stages a self-contained riscv64 daemon directory containing the untouched Node.js riscv64
+ * runtime, esbuild daemon bundle, cross-compiled deskfleet.node addon, and launcher script.
+ */
+export async function buildRiscv64DaemonBundle(
   repoRoot: string,
-  outDir: string,
+  bundleDir: string,
   nodeVersion: string = process.version,
 ): Promise<string> {
-  mkdirSync(outDir, { recursive: true })
+  rmSync(bundleDir, { recursive: true, force: true })
+  mkdirSync(bundleDir, { recursive: true })
 
   // 1. Ensure Rust riscv64 target is installed
   const installed = execFileSync("rustup", ["target", "list", "--installed"], {
@@ -230,50 +244,28 @@ export async function buildRiscv64SeaDaemon(
   if (!existsSync(nativeSo)) {
     throw new Error(`Expected cross-compiled native addon at ${nativeSo}`)
   }
+  copyFileSync(nativeSo, join(bundleDir, "deskfleet.node"))
 
-  const workDir = mkdtempSync(join(tmpdir(), "deskfleet-riscv64-sea-"))
+  // 3. Bundle apps/daemon/src/main.ts into a single CJS script
+  const { build: esbuild } = await import("esbuild")
+  await esbuild({
+    absWorkingDir: repoRoot,
+    entryPoints: ["apps/daemon/src/main.ts"],
+    outfile: join(bundleDir, "daemon.cjs"),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node24",
+    define: {
+      "import.meta.dirname": "__dirname",
+      "import.meta.url": "__deskfleet_module_url",
+    },
+    banner: { js: "const __deskfleet_module_url = require('node:url').pathToFileURL(__filename).href;" },
+  })
+
+  // 4. Fetch untouched Node.js riscv64 runtime matching the locked Node version
+  const workDir = mkdtempSync(join(tmpdir(), "deskfleet-riscv64-node-"))
   try {
-    const addon = join(workDir, "deskfleet.node")
-    copyFileSync(nativeSo, addon)
-
-    // 3. Bundle apps/daemon/src/main.ts into single CJS script
-    const { build: esbuild } = await import("esbuild")
-    const bundle = join(workDir, "daemon.cjs")
-    await esbuild({
-      absWorkingDir: repoRoot,
-      entryPoints: ["apps/daemon/src/main.ts"],
-      outfile: bundle,
-      bundle: true,
-      platform: "node",
-      format: "cjs",
-      target: "node24",
-      define: {
-        "import.meta.dirname": "__dirname",
-        "import.meta.url": "__deskfleet_module_url",
-      },
-      banner: { js: "const __deskfleet_module_url = require('node:url').pathToFileURL(__filename).href;" },
-    })
-
-    // 4. Generate SEA blob (JS + riscv64 deskfleet.node asset)
-    const seaConfig = join(workDir, "sea-config.json")
-    const seaBlob = join(workDir, "sea-prep.blob")
-    writeFileSync(
-      seaConfig,
-      JSON.stringify(
-        {
-          main: bundle,
-          output: seaBlob,
-          disableExperimentalSEAWarning: true,
-          assets: { "deskfleet.node": addon },
-        },
-        null,
-        2,
-      ) + "\n",
-      "utf8",
-    )
-    execFileSync(process.execPath, ["--experimental-sea-config", seaConfig], { stdio: "inherit" })
-
-    // 5. Fetch Node.js riscv64 binary matching the locked Node version
     const nodeTar = join(workDir, "node-riscv64.tar.xz")
     const nodeUrl = nodeRiscv64DownloadUrl(nodeVersion)
     console.log(`Downloading ${nodeUrl}`)
@@ -282,33 +274,21 @@ export async function buildRiscv64SeaDaemon(
     mkdirSync(nodeExtract, { recursive: true })
     execFileSync("tar", ["-xJf", nodeTar, "-C", nodeExtract, "--strip-components=1"], { stdio: "inherit" })
 
-    const daemonPath = join(outDir, "deskfleet-daemon")
-    copyFileSync(join(nodeExtract, "bin/node"), daemonPath)
-    chmodSync(daemonPath, 0o755)
-
-    // 6. Inject NODE_SEA_BLOB into the riscv64 ELF executable via postject
-    const postject = createRequire(import.meta.url).resolve("postject/dist/cli.js")
-    execFileSync(
-      process.execPath,
-      [
-        postject,
-        daemonPath,
-        "NODE_SEA_BLOB",
-        seaBlob,
-        "--sentinel-fuse",
-        "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
-      ],
-      { stdio: "inherit" },
-    )
-    chmodSync(daemonPath, 0o755)
-    return daemonPath
+    const nodeBin = join(bundleDir, "node")
+    copyFileSync(join(nodeExtract, "bin/node"), nodeBin)
+    chmodSync(nodeBin, 0o755)
   } finally {
     rmSync(workDir, { recursive: true, force: true })
   }
+
+  const wrapperPath = join(bundleDir, "deskfleet-daemon")
+  writeFileSync(wrapperPath, buildDaemonWrapperScript(), "utf8")
+  chmodSync(wrapperPath, 0o755)
+  return bundleDir
 }
 
 export async function buildRiscv64GuestDiskImage(options: {
-  readonly daemonBinaryPath: string
+  readonly daemonBundleDir: string
   readonly outDir: string
   readonly version: string
   readonly partitionMiB?: number
@@ -319,18 +299,22 @@ export async function buildRiscv64GuestDiskImage(options: {
   const workDir = mkdtempSync(join(tmpdir(), "deskfleet-riscv64-img-"))
   try {
     const contextDir = join(workDir, "context")
+    const contextDaemonDir = join(contextDir, "daemon")
     const rootfsDir = join(workDir, "rootfs")
-    mkdirSync(contextDir, { recursive: true })
+    mkdirSync(contextDaemonDir, { recursive: true })
     mkdirSync(rootfsDir, { recursive: true })
 
-    copyFileSync(options.daemonBinaryPath, join(contextDir, "deskfleet-daemon"))
-    chmodSync(join(contextDir, "deskfleet-daemon"), 0o755)
+    for (const file of ["deskfleet-daemon", "node", "daemon.cjs", "deskfleet.node"]) {
+      copyFileSync(join(options.daemonBundleDir, file), join(contextDaemonDir, file))
+    }
+    chmodSync(join(contextDaemonDir, "deskfleet-daemon"), 0o755)
+    chmodSync(join(contextDaemonDir, "node"), 0o755)
     writeFileSync(join(contextDir, "extlinux.conf"), buildExtlinuxConf(), "utf8")
     writeFileSync(join(contextDir, "deskfleet-exec-agent.sh"), buildExecAgentScript(), "utf8")
     writeFileSync(join(contextDir, "deskfleet-exec-agent.service"), buildExecAgentSystemdUnit(), "utf8")
     writeFileSync(join(contextDir, "Dockerfile"), buildGuestRootfsDockerfile(options.version), "utf8")
 
-    // Export the complete Ubuntu 24.04 riscv64 rootfs directory via BuildKit local exporter
+    // Build, smoke-test inside linux/riscv64 container, and export the complete rootfs
     execFileSync(
       "docker",
       [
@@ -347,7 +331,7 @@ export async function buildRiscv64GuestDiskImage(options: {
       { stdio: "inherit" },
     )
 
-    // Populate /etc/hosts and /etc/resolv.conf outside Docker (Docker bind-mounts /etc/hosts read-only during RUN)
+    // Populate /etc/hosts and /etc/resolv.conf outside Docker (Docker mounts /etc/hosts read-only during RUN)
     rmSync(join(rootfsDir, ".dockerenv"), { force: true })
     rmSync(join(rootfsDir, "etc/hosts"), { force: true })
     writeFileSync(join(rootfsDir, "etc/hosts"), "127.0.0.1 localhost deskfleet-ios\n::1 localhost\n", "utf8")
@@ -357,27 +341,6 @@ export async function buildRiscv64GuestDiskImage(options: {
       mkdirSync(join(rootfsDir, dir), { recursive: true })
     }
     chmodSync(join(rootfsDir, "tmp"), 0o1777)
-
-    // Smoke-test the pre-baked riscv64 daemon binary inside the rootfs via qemu-riscv64
-    const qemuBin = existsSync("/usr/bin/qemu-riscv64-static") ? "/usr/bin/qemu-riscv64-static" : "qemu-riscv64"
-    const statusOut = execFileSync(
-      qemuBin,
-      ["-L", rootfsDir, join(rootfsDir, "opt/deskfleet/deskfleet-daemon"), "status"],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: "/tmp",
-          XDG_CONFIG_HOME: "/tmp",
-          XDG_DATA_HOME: "/tmp",
-        },
-      },
-    )
-    const parsed = JSON.parse(statusOut.trim()) as { registrations?: unknown }
-    if (!Array.isArray(parsed.registrations)) {
-      throw new Error(`Unexpected riscv64 daemon status output: ${statusOut}`)
-    }
-    console.log("Verified pre-baked riscv64 deskfleet-daemon status:", statusOut.trim())
 
     // Build ext4 partition image in userspace (no root/loop mount required)
     const partImg = join(workDir, "part.ext4")
@@ -412,17 +375,18 @@ if (import.meta.main) {
   const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version?: string }
   const version = process.env.DESKFLEET_GUEST_VERSION || pkg.version || "0.0.0"
 
-  const daemonPath = await buildRiscv64SeaDaemon(repoRoot, outDir)
+  const daemonBundleDir = join(outDir, "daemon-bundle")
+  await buildRiscv64DaemonBundle(repoRoot, daemonBundleDir)
   const daemonTar = join(outDir, "deskfleet-linux-riscv64.tar.gz")
-  execFileSync("tar", ["-czf", daemonTar, "-C", outDir, "deskfleet-daemon"], { stdio: "inherit" })
+  execFileSync("tar", ["-czf", daemonTar, "-C", daemonBundleDir, "."], { stdio: "inherit" })
 
   const { rawImagePath, gzImagePath } = await buildRiscv64GuestDiskImage({
-    daemonBinaryPath: daemonPath,
+    daemonBundleDir,
     outDir,
     version,
   })
-  // Remove uncompressed raw image after gzipping so release upload stays lean
   rmSync(rawImagePath, { force: true })
+  rmSync(daemonBundleDir, { recursive: true, force: true })
 
   const sums: string[] = []
   for (const file of [gzImagePath, daemonTar]) {

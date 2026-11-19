@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import {
+  buildDaemonWrapperScript,
   buildExecAgentScript,
   buildExecAgentSystemdUnit,
   buildExtlinuxConf,
@@ -33,10 +34,12 @@ test("buildExtlinuxConf and guest rootfs Dockerfile bake nvme, r8169, exec agent
   const dockerfile = buildGuestRootfsDockerfile("0.18.2")
   assert.match(dockerfile, /FROM --platform=linux\/riscv64 ubuntu:24\.04/)
   assert.match(dockerfile, /nvme\\nnvme_core\\nr8169\\next4/)
-  assert.match(dockerfile, /COPY deskfleet-daemon \/opt\/deskfleet\/deskfleet-daemon/)
+  assert.match(dockerfile, /COPY daemon\/ \/opt\/deskfleet\//)
+  assert.match(dockerfile, /\/opt\/deskfleet\/deskfleet-daemon status/)
   assert.match(dockerfile, /deskfleet-exec-agent\.service/)
   assert.match(dockerfile, /20-rtl8169\.network/)
 
+  assert.match(buildDaemonWrapperScript(), /exec "\$DIR\/node" "\$DIR\/daemon\.cjs" "\$@"/)
   assert.match(buildExecAgentScript(), /DEV="\/dev\/ttyS1"/)
   assert.match(buildExecAgentSystemdUnit(), /ExecStart=\/usr\/local\/bin\/deskfleet-exec-agent\.sh/)
 })
