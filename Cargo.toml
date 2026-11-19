@@ -23,7 +23,7 @@ members = [
     "crates/windows-desktop",
     "crates/x11",
 ]
-exclude = [".agents/skills/rust-skills/checks", "vendor/portable-pty"]
+exclude = [".agents/skills/rust-skills/checks", "packages/capacitor-bridge/ios/rppairing", "vendor/portable-pty"]
 resolver = "3"
 
 [patch.crates-io]

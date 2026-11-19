@@ -19,13 +19,35 @@ let package = Package(
             name: "DeskfleetDesktopViewerFFI",
             path: "ios/Frameworks/DeskfleetDesktopViewerFFI.xcframework"
         ),
+        .binaryTarget(
+            name: "IshPlusRPPairing",
+            path: "ios/Frameworks/IshPlusRPPairing.xcframework"
+        ),
+        .binaryTarget(
+            name: "Librvvm",
+            path: "ios/Frameworks/Librvvm.xcframework"
+        ),
+        .target(
+            name: "RvvmRuntime",
+            dependencies: [
+                "Librvvm"
+            ],
+            path: "ios/Sources/RvvmRuntime",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation")
+            ]
+        ),
         .target(
             name: "DeskFleetBridge",
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
                 .product(name: "FirebaseAnalytics", package: "firebase-ios-sdk"),
-                "DeskfleetDesktopViewerFFI"
+                "DeskfleetDesktopViewerFFI",
+                "IshPlusRPPairing",
+                "Librvvm",
+                "RvvmRuntime"
             ],
             path: "ios/Sources/DeskFleetBridge",
             resources: [.process("PrivacyInfo.xcprivacy")],
@@ -43,12 +65,15 @@ let package = Package(
                 .linkedFramework("IOSurface"),
                 .linkedFramework("ImageIO"),
                 .linkedFramework("Metal"),
+                .linkedFramework("Network"),
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("ReplayKit"),
                 .linkedFramework("Security"),
                 .linkedFramework("Speech"),
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("UIKit"),
+                .linkedFramework("UniformTypeIdentifiers"),
+                .linkedFramework("UserNotifications"),
                 .linkedFramework("VideoToolbox"),
                 .linkedLibrary("c++"),
                 .linkedLibrary("resolv")

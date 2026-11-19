@@ -21,6 +21,11 @@
 		DF4770072F00000100477001 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF4770082F00000100477001 /* CoreMedia.framework */; };
 		DF4770092F00000100477001 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF47700A2F00000100477001 /* Accelerate.framework */; };
 		DF47700B2F00000100477001 /* BroadcastUpload.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF47700C2F00000100477001 /* BroadcastUpload.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF5880012F00000100588001 /* HelperPrincipal.m in Sources */ = {isa = PBXBuildFile; fileRef = DF5880022F00000100588001 /* HelperPrincipal.m */; };
+		DF5880032F00000100588001 /* JitHelperHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF5880042F00000100588001 /* JitHelperHandler.swift */; };
+		DF58800B2F00000100588001 /* StikJIT.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF5880092F00000100588001 /* StikJIT.xcframework */; platformFilter = ios; };
+		DF58800C2F00000100588001 /* DeskFleetJITHelper.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF5880082F00000100588001 /* DeskFleetJITHelper.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF58800E2F00000100588001 /* StikJIT.xcframework in Embed JIT Frameworks */ = {isa = PBXBuildFile; fileRef = DF5880092F00000100588001 /* StikJIT.xcframework */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +35,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = DF47700E2F00000100477001;
 			remoteInfo = BroadcastUpload;
+		};
+		DF58800F2F00000100588001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF5880102F00000100588001;
+			remoteInfo = DeskFleetJITHelper;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -41,8 +53,20 @@
 			dstSubfolderSpec = 13;
 			files = (
 				DF47700B2F00000100477001 /* BroadcastUpload.appex in Embed Foundation Extensions */,
+				DF58800C2F00000100588001 /* DeskFleetJITHelper.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF5880122F00000100588001 /* Embed JIT Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				DF58800E2F00000100588001 /* StikJIT.xcframework in Embed JIT Frameworks */,
+			);
+			name = "Embed JIT Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -67,6 +91,12 @@
 		DF4770102F00000100477001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		DF4770112F00000100477001 /* BroadcastUpload.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BroadcastUpload.entitlements; sourceTree = "<group>"; };
 		DF4770122F00000100477001 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		DF5880022F00000100588001 /* HelperPrincipal.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HelperPrincipal.m; sourceTree = "<group>"; };
+		DF5880042F00000100588001 /* JitHelperHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JitHelperHandler.swift; sourceTree = "<group>"; };
+		DF5880062F00000100588001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		DF5880072F00000100588001 /* DeskFleetJITHelper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DeskFleetJITHelper.entitlements; sourceTree = "<group>"; };
+		DF5880082F00000100588001 /* DeskFleetJITHelper.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DeskFleetJITHelper.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF5880092F00000100588001 /* StikJIT.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = StikJIT.xcframework; path = "../../../../packages/capacitor-bridge/ios/Frameworks/StikJIT.xcframework"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +118,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF5880142F00000100588001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF58800B2F00000100588001 /* StikJIT.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,6 +135,7 @@
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				DF4770142F00000100477001 /* BroadcastUpload */,
+				DF5880172F00000100588001 /* DeskFleetJITHelper */,
 				DF4770152F00000100477001 /* Frameworks */,
 				504EC3051FED79650016851F /* Products */,
 			);
@@ -107,6 +146,7 @@
 			children = (
 				504EC3041FED79650016851F /* App.app */,
 				DF47700C2F00000100477001 /* BroadcastUpload.appex */,
+				DF5880082F00000100588001 /* DeskFleetJITHelper.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -138,12 +178,24 @@
 			path = BroadcastUpload;
 			sourceTree = "<group>";
 		};
+		DF5880172F00000100588001 /* DeskFleetJITHelper */ = {
+			isa = PBXGroup;
+			children = (
+				DF5880022F00000100588001 /* HelperPrincipal.m */,
+				DF5880042F00000100588001 /* JitHelperHandler.swift */,
+				DF5880062F00000100588001 /* Info.plist */,
+				DF5880072F00000100588001 /* DeskFleetJITHelper.entitlements */,
+			);
+			path = DeskFleetJITHelper;
+			sourceTree = "<group>";
+		};
 		DF4770152F00000100477001 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
 				DF4770062F00000100477001 /* ReplayKit.framework */,
 				DF4770082F00000100477001 /* CoreMedia.framework */,
 				DF47700A2F00000100477001 /* Accelerate.framework */,
+				DF5880092F00000100588001 /* StikJIT.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -159,12 +211,15 @@
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
 				DF4770202F00000100477001 /* Stage Optional Firebase Configuration */,
+				DF5880132F00000100588001 /* Bundle RISC-V Guest Firmware */,
+				DF5880122F00000100588001 /* Embed JIT Frameworks */,
 				DF47700F2F00000100477001 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				DF4770162F00000100477001 /* PBXTargetDependency */,
+				DF5880112F00000100588001 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -191,6 +246,23 @@
 			productReference = DF47700C2F00000100477001 /* BroadcastUpload.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		DF5880102F00000100588001 /* DeskFleetJITHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF5880182F00000100588001 /* Build configuration list for PBXNativeTarget "DeskFleetJITHelper" */;
+			buildPhases = (
+				DF5880152F00000100588001 /* Sources */,
+				DF5880142F00000100588001 /* Frameworks */,
+				DF5880162F00000100588001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DeskFleetJITHelper;
+			productName = DeskFleetJITHelper;
+			productReference = DF5880082F00000100588001 /* DeskFleetJITHelper.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -206,6 +278,10 @@
 						ProvisioningStyle = Automatic;
 					};
 					DF47700E2F00000100477001 = {
+						CreatedOnToolsVersion = 16.0;
+						ProvisioningStyle = Automatic;
+					};
+					DF5880102F00000100588001 = {
 						CreatedOnToolsVersion = 16.0;
 						ProvisioningStyle = Automatic;
 					};
@@ -229,6 +305,7 @@
 			targets = (
 				504EC3031FED79650016851F /* App */,
 				DF47700E2F00000100477001 /* BroadcastUpload */,
+				DF5880102F00000100588001 /* DeskFleetJITHelper */,
 			);
 		};
 /* End PBXProject section */
@@ -247,6 +324,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		DF4770192F00000100477001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DF5880162F00000100588001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -275,6 +359,25 @@
 			shellPath = /bin/sh;
 			shellScript = "if [ -f \"$SRCROOT/App/GoogleService-Info.plist\" ]; then\n  cp \"$SRCROOT/App/GoogleService-Info.plist\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/GoogleService-Info.plist\"\nfi\n";
 		};
+		DF5880132F00000100588001 /* Bundle RISC-V Guest Firmware */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle RISC-V Guest Firmware";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nGUEST_SRC=\"$SRCROOT/../../../../packages/capacitor-bridge/ios/Frameworks/Guest\"\nif [ \"${PLATFORM_NAME:-iphoneos}\" = \"iphonesimulator\" ] && [ ! -d \"$GUEST_SRC\" ]; then\n  exit 0\nfi\nGUEST_DST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Guest\"\nrm -rf \"$GUEST_DST\"\nmkdir -p \"$GUEST_DST\"\nfor f in fw_payload.bin fw_jump.bin; do\n  if [ -f \"$GUEST_SRC/$f\" ]; then\n    cp \"$GUEST_SRC/$f\" \"$GUEST_DST/$f\"\n  fi\ndone\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -296,6 +399,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF5880152F00000100588001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF5880012F00000100588001 /* HelperPrincipal.m in Sources */,
+				DF5880032F00000100588001 /* JitHelperHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -303,6 +415,11 @@
 			isa = PBXTargetDependency;
 			target = DF47700E2F00000100477001 /* BroadcastUpload */;
 			targetProxy = DF47700D2F00000100477001 /* PBXContainerItemProxy */;
+		};
+		DF5880112F00000100588001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF5880102F00000100588001 /* DeskFleetJITHelper */;
+			targetProxy = DF58800F2F00000100588001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -528,6 +645,57 @@
 			};
 			name = Release;
 		};
+		DF5880192F00000100588001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = DeskFleetJITHelper/DeskFleetJITHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DeskFleetJITHelper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.jit-helper;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DF58801A2F00000100588001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = DeskFleetJITHelper/DeskFleetJITHelper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DeskFleetJITHelper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.jit-helper;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -554,6 +722,15 @@
 			buildConfigurations = (
 				DF47701A2F00000100477001 /* Debug */,
 				DF47701B2F00000100477001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DF5880182F00000100588001 /* Build configuration list for PBXNativeTarget "DeskFleetJITHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DF5880192F00000100588001 /* Debug */,
+				DF58801A2F00000100588001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

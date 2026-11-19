@@ -45,6 +45,9 @@ if (Capacitor.isNativePlatform()) {
   adapter.settings = { ...adapter.settings, ...localDaemonHostSettings.settings }
 }
 if (Capacitor.getPlatform() === "ios") {
+  if (adapter.central) {
+    attachLocalEnrollment(adapter.central)
+  }
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
 }
 if (Capacitor.isNativePlatform() && adapter.central) {

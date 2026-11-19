@@ -69,7 +69,10 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         CAPPluginMethod(name: "setTelemetryConsent", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTelemetryUserId", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "logTelemetryEvent", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonPrepareEnrollment", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonEnroll", returnType: CAPPluginReturnPromise)
     ]
 
     nonisolated(unsafe) internal static weak var activePlugin: DeskFleetBridge?
@@ -82,6 +85,110 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
     private lazy var impactFeedback = UIImpactFeedbackGenerator(style: .light)
     private lazy var selectionFeedback = UISelectionFeedbackGenerator()
     private let localFiles = LocalFilesBridge()
+    private var rvvmDaemon: RvvmDaemonManager?
+
+    private func daemon() -> RvvmDaemonManager {
+        if let rvvmDaemon { return rvvmDaemon }
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let versionName = (version?.isEmpty == false) ? version! : "0.0.0"
+        let deviceName: String = Thread.isMainThread
+            ? UIDevice.current.name
+            : DispatchQueue.main.sync { UIDevice.current.name }
+        let fallbackName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "iOS" : deviceName
+        let manager = RvvmDaemonManager(versionName: versionName, fallbackMachineName: fallbackName)
+        rvvmDaemon = manager
+        return manager
+    }
+
+    @objc func localDaemonStatus(_ call: CAPPluginCall) {
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = manager.status()
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(status) else {
+                call.reject("Invalid local daemon status payload")
+                return
+            }
+            call.resolve(coerced)
+        }
+    }
+
+    @objc func localDaemonPrepareEnrollment(_ call: CAPPluginCall) {
+        guard let serverUrl = call.getString("serverUrl")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !serverUrl.isEmpty else {
+            call.reject("Missing serverUrl")
+            return
+        }
+        guard let teamId = call.getString("teamId")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !teamId.isEmpty else {
+            call.reject("Missing teamId")
+            return
+        }
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let prepared = try manager.prepareEnrollment(serverUrl: serverUrl, teamId: teamId) { [weak self] in
+                    self?.bridge?.viewController
+                }
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(prepared) else {
+                    call.reject("Invalid prepare-enrollment payload")
+                    return
+                }
+                call.resolve(coerced)
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
+
+    @objc func localDaemonEnroll(_ call: CAPPluginCall) {
+        guard let serverUrl = call.getString("serverUrl")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !serverUrl.isEmpty else {
+            call.reject("Missing serverUrl")
+            return
+        }
+        guard let machineId = call.getString("machineId")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !machineId.isEmpty else {
+            call.reject("Missing machineId")
+            return
+        }
+        guard let teamId = call.getString("teamId")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !teamId.isEmpty else {
+            call.reject("Missing teamId")
+            return
+        }
+        guard let token = call.getString("token")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            call.reject("Missing token")
+            return
+        }
+        guard let originId = call.getString("originId")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !originId.isEmpty else {
+            call.reject("Missing originId")
+            return
+        }
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let credentialsJson = try RvvmDaemonCommands.credentialsJson(
+                    machineId: machineId,
+                    teamId: teamId,
+                    token: token,
+                    originId: originId
+                )
+                let enrolled = try manager.enroll(serverUrl: serverUrl, credentialsJson: credentialsJson) { [weak self] in
+                    self?.bridge?.viewController
+                }
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(enrolled) else {
+                    call.reject("Invalid enroll payload")
+                    return
+                }
+                call.resolve(coerced)
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
 
     @objc func filesOpen(_ call: CAPPluginCall) { localFiles.open(call) }
     @objc func filesCall(_ call: CAPPluginCall) { localFiles.perform(call) }
