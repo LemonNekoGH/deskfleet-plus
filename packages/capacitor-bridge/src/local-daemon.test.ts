@@ -1,5 +1,4 @@
-import assert from "node:assert/strict"
-import test from "node:test"
+import { expect, test } from "vitest"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
 import { attachAndroidLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
 
@@ -47,8 +46,8 @@ test("attachAndroidLocalEnrollment exposes localEnrollment status from native pl
   }
 
   attachAndroidLocalEnrollment(central, plugin)
-  assert.ok(central.localEnrollment)
-  assert.deepEqual(await central.localEnrollment(), expected)
+  expect(central.localEnrollment).toBeTypeOf("function")
+  expect(await central.localEnrollment!()).toEqual(expected)
 })
 
 test("enrollLocal short-circuits when an active registration already exists for the server and team", async () => {
@@ -73,9 +72,9 @@ test("enrollLocal short-circuits when an active registration already exists for 
 
   attachAndroidLocalEnrollment(central, plugin)
   const result = await central.enrollLocal!("team-1", "My Phone")
-  assert.deepEqual(result, existing)
-  assert.equal(prepared, false)
-  assert.equal(calls.length, 0)
+  expect(result).toEqual(existing)
+  expect(prepared).toBe(false)
+  expect(calls).toHaveLength(0)
 })
 
 test("enrollLocal prepares daemon, registers with central, trims machine name, and enrolls daemon", async () => {
@@ -111,9 +110,9 @@ test("enrollLocal prepares daemon, registers with central, trims machine name, a
 
   attachAndroidLocalEnrollment(central, plugin)
   const result = await central.enrollLocal!("team-1", "  Lemon Phone  ")
-  assert.deepEqual(result, enrolledRecord)
-  assert.deepEqual(prepareCalls, [{ serverUrl: "https://fleet.example", teamId: "team-1" }])
-  assert.deepEqual(calls, [{
+  expect(result).toEqual(enrolledRecord)
+  expect(prepareCalls).toEqual([{ serverUrl: "https://fleet.example", teamId: "team-1" }])
+  expect(calls).toEqual([{
     teamId: "team-1",
     payload: {
       name: "Lemon Phone",
@@ -122,7 +121,7 @@ test("enrollLocal prepares daemon, registers with central, trims machine name, a
       identityToken: "id-token-xyz",
     },
   }])
-  assert.deepEqual(enrollCalls, [{
+  expect(enrollCalls).toEqual([{
     serverUrl: "https://fleet.example",
     machineId: "central-machine-42",
     teamId: "team-1",
@@ -144,9 +143,9 @@ test("enrollLocal falls back to daemon machineName on blank input and propagates
   }
 
   attachAndroidLocalEnrollment(central, plugin)
-  await assert.rejects(() => central.enrollLocal!("team-1", 123 as unknown as string), /Invalid machine name/)
-  await assert.rejects(() => central.enrollLocal!("team-1", "   "), /container enroll failed/)
-  assert.deepEqual(calls[0]?.payload, {
+  await expect(central.enrollLocal!("team-1", 123 as unknown as string)).rejects.toThrow(/Invalid machine name/)
+  await expect(central.enrollLocal!("team-1", "   ")).rejects.toThrow(/container enroll failed/)
+  expect(calls[0]?.payload).toEqual({
     name: "Fallback Phone",
     originId: "origin-1",
     localMachineId: "local-1",
