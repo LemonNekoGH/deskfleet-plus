@@ -52,6 +52,7 @@ class DeskFleetBridge : Plugin() {
             nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
             versionName = versionName,
             fallbackMachineName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
+            assetOpener = EmbeddedAssetOpener { name -> runCatching { context.assets.open(name) }.getOrNull() },
         ).also { prootDaemon = it }
     }
 

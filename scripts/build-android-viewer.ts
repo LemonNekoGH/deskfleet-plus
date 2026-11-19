@@ -230,17 +230,17 @@ export async function stageTermuxProotBinaries(
     const tallocRoot = extractedDirs.get("libtalloc")!
     const shmemRoot = extractedDirs.get("libandroid-shmem")!
 
-    let prootBin = readFileSync(join(prootRoot, termuxPrefix, "bin/proot"))
+    let prootBin: Buffer = readFileSync(join(prootRoot, termuxPrefix, "bin/proot"))
     prootBin = patchCStringInPlace(prootBin, "libtalloc.so.2", "libtalloc.so")
     prootBin = patchCStringInPlace(prootBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
 
     const loaderBin = readFileSync(join(prootRoot, termuxPrefix, "libexec/proot/loader"))
 
-    let tallocBin = readFileSync(join(tallocRoot, termuxPrefix, "lib/libtalloc.so.2.5.0"))
+    let tallocBin: Buffer = readFileSync(join(tallocRoot, termuxPrefix, "lib/libtalloc.so.2.5.0"))
     tallocBin = patchCStringInPlace(tallocBin, "libtalloc.so.2", "libtalloc.so")
     tallocBin = patchCStringInPlace(tallocBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
 
-    let shmemBin = readFileSync(join(shmemRoot, termuxPrefix, "lib/libandroid-shmem.so"))
+    let shmemBin: Buffer = readFileSync(join(shmemRoot, termuxPrefix, "lib/libandroid-shmem.so"))
     shmemBin = patchCStringInPlace(shmemBin, "/data/data/com.termux/files/usr/lib", "$ORIGIN")
     shmemBin = patchCStringInPlace(shmemBin, "/data/data/com.termux/files/usr/tmp/ashv_key_%d", "./ashv_key_%d")
 
@@ -260,6 +260,94 @@ export async function stageTermuxProotBinaries(
       staged.push(targetPath)
     }
     return staged
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
+export const SCRCPY_SERVER_VERSION = "3.1"
+export const SCRCPY_SERVER_URL = `https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_SERVER_VERSION}/scrcpy-server-v${SCRCPY_SERVER_VERSION}`
+
+export function buildEmbeddedRootfsDockerfile(): string {
+  return [
+    "FROM --platform=linux/arm64 ubuntu:24.04 AS rootfs",
+    "ENV DEBIAN_FRONTEND=noninteractive",
+    "RUN apt-get update \\",
+    "  && apt-get install -y --no-install-recommends ca-certificates git curl adb \\",
+    "  && apt-get clean \\",
+    "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*",
+    "COPY deskfleet-linux-arm64.tar.gz /tmp/deskfleet-linux-arm64.tar.gz",
+    "COPY scrcpy-server.jar /opt/deskfleet/scrcpy-server.jar",
+    "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace \\",
+    "  && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet \\",
+    "  && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz \\",
+    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon \\",
+    "  && chmod 0644 /opt/deskfleet/scrcpy-server.jar \\",
+    "  && TAB=$(printf '\\t') \\",
+    "  && find / -xdev -type f -links +1 -printf '%i\\t%p\\n' \\",
+    "  | sort -n \\",
+    "  | awk -F'\\t' '$1 == prev { print target \"\\t\" $2; next } { prev = $1; target = $2 }' \\",
+    "  | while IFS=\"$TAB\" read -r target link; do ln -rsf \"$target\" \"$link\"; done",
+    "",
+    "FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS packager",
+    "COPY --from=rootfs / /rootfs",
+    "RUN rm -rf /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /rootfs/.dockerenv \\",
+    "  && mkdir -p /rootfs/dev /rootfs/proc /rootfs/sys /rootfs/tmp /out \\",
+    "  && chmod 1777 /rootfs/tmp \\",
+    "  && rm -f /rootfs/etc/resolv.conf /rootfs/etc/hosts \\",
+    "  && printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > /rootfs/etc/resolv.conf \\",
+    "  && printf '127.0.0.1 localhost\\n::1 localhost\\n' > /rootfs/etc/hosts \\",
+    "  && tar -czf /out/ubuntu-rootfs.tar.gz -C /rootfs .",
+    "",
+    "FROM scratch AS export",
+    "COPY --from=packager /out/ubuntu-rootfs.tar.gz /ubuntu-rootfs.tar.gz",
+    "",
+  ].join("\n")
+}
+
+async function fetchBuffer(url: string): Promise<Buffer> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`Failed to download ${url}: HTTP ${response.status}`)
+  }
+  return Buffer.from(await response.arrayBuffer())
+}
+
+async function downloadDaemonArchive(destination: string, version: string): Promise<void> {
+  const versionedUrl = `https://github.com/yet-another-ai/deskfleet/releases/download/v${version}/deskfleet-linux-arm64.tar.gz`
+  try {
+    writeFileSync(destination, await fetchBuffer(versionedUrl))
+    return
+  } catch {
+    const latestUrl = "https://github.com/yet-another-ai/deskfleet/releases/latest/download/deskfleet-linux-arm64.tar.gz"
+    writeFileSync(destination, await fetchBuffer(latestUrl))
+  }
+}
+
+export async function stageEmbeddedUbuntuRootfs(assetsDir: string, version: string): Promise<string> {
+  mkdirSync(assetsDir, { recursive: true })
+  const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-ubuntu-rootfs-"))
+  try {
+    await downloadDaemonArchive(join(tempRoot, "deskfleet-linux-arm64.tar.gz"), version)
+    writeFileSync(join(tempRoot, "scrcpy-server.jar"), await fetchBuffer(SCRCPY_SERVER_URL))
+    writeFileSync(join(tempRoot, "Dockerfile"), buildEmbeddedRootfsDockerfile(), "utf8")
+
+    if (process.arch !== "arm64") {
+      execFileSync("docker", ["run", "--privileged", "--rm", "tonistiigi/binfmt:latest", "--install", "arm64"], {
+        stdio: "inherit",
+      })
+    }
+
+    execFileSync(
+      "docker",
+      ["buildx", "build", "--target", "export", "--output", `type=local,dest=${assetsDir}`, tempRoot],
+      { stdio: "inherit" },
+    )
+    const outputArchive = join(assetsDir, "ubuntu-rootfs.tar.gz")
+    if (!existsSync(outputArchive)) {
+      throw new Error(`Expected embedded Ubuntu rootfs archive was not created at ${outputArchive}`)
+    }
+    return outputArchive
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
@@ -305,4 +393,11 @@ if (import.meta.main) {
   copyFileSync(builtSo, targetSo)
   const prootFiles = await stageTermuxProotBinaries(outDir, readelfBin)
   console.log(`Staged ${targetSo} and ${prootFiles.length} proot binaries (NDK ${basename(ndkRoot)}, API ${MIN_ANDROID_API}, 16 KB aligned)`)
+
+  if (release || process.env.DESKFLEET_ANDROID_BUNDLE_ROOTFS === "1") {
+    const webPackageJson = JSON.parse(readFileSync(join(repoRoot, "apps/web/package.json"), "utf8")) as { version: string }
+    const assetsDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/assets")
+    const rootfsAsset = await stageEmbeddedUbuntuRootfs(assetsDir, webPackageJson.version)
+    console.log(`Staged embedded Ubuntu rootfs asset at ${rootfsAsset}`)
+  }
 }

@@ -29,6 +29,10 @@ internal interface AssetDownloader {
     fun download(url: String, destination: File, gunzip: Boolean = false)
 }
 
+internal fun interface EmbeddedAssetOpener {
+    fun open(assetName: String): InputStream?
+}
+
 internal object ProcessProotRunner : ProotRunner {
     override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
         val builder = ProcessBuilder(listOf(invocation.executable) + invocation.args)
@@ -117,12 +121,13 @@ internal class ProotDaemonManager(
     private val runner: ProotRunner = ProcessProotRunner,
     private val downloader: AssetDownloader = HttpAssetDownloader,
     private val sleepMillis: (Long) -> Unit = Thread::sleep,
+    private val assetOpener: EmbeddedAssetOpener = EmbeddedAssetOpener { null },
 ) {
     private val baseDir = File(filesDir, "linux")
     private val rootfsDir = File(baseDir, "rootfs")
     private val dataDir = File(baseDir, "data")
     private val prootTmpDir = File(baseDir, "proot-tmp")
-    private val workspaceDir = File(rootfsDir, "root/workspace")
+    private val workspaceDir = File(baseDir, "workspace")
     private val daemonBin = File(rootfsDir, "opt/deskfleet/deskfleet-daemon")
     private val scrcpyJar = File(rootfsDir, "opt/deskfleet/scrcpy-server.jar")
     private val versionFile = File(baseDir, "version")
@@ -178,53 +183,46 @@ internal class ProotDaemonManager(
         rootfsDir.mkdirs()
         dataDir.mkdirs()
         prootTmpDir.mkdirs()
+        workspaceDir.mkdirs()
 
         val shellBin = File(rootfsDir, "bin/sh")
+        val installedVersion = if (versionFile.isFile) versionFile.readText().trim() else ""
+        if (shellBin.exists() && daemonBin.exists() && scrcpyJar.isFile && installedVersion == versionName) {
+            prepareRootfsDirectories()
+            return
+        }
+
+        val bundledAsset = assetOpener.open(EMBEDDED_ROOTFS_ASSET)
+        if (bundledAsset != null) {
+            val rootfsTar = File(cacheDir, "ubuntu-rootfs.tar")
+            try {
+                bundledAsset.use { raw ->
+                    GZIPInputStream(raw).use { gzip ->
+                        FileOutputStream(rootfsTar).use { out ->
+                            gzip.copyTo(out)
+                        }
+                    }
+                }
+                extractRootfsTar(rootfsTar, shellBin)
+                prepareRootfsDirectories()
+                if (daemonBin.exists()) {
+                    daemonBin.setExecutable(true, false)
+                }
+                if (scrcpyJar.isFile) {
+                    scrcpyJar.setReadable(true, false)
+                }
+                versionFile.writeText(versionName, Charsets.UTF_8)
+                return
+            } finally {
+                rootfsTar.delete()
+            }
+        }
+
         if (!shellBin.exists()) {
-            rootfsDir.deleteRecursively()
-            rootfsDir.mkdirs()
             val rootfsTar = File(cacheDir, "ubuntu-rootfs.tar")
             try {
                 downloadUbuntuRootfs(rootfsTar)
-                val prootExtract = runner.run(
-                    ProotInvocation(
-                        executable = File(nativeLibraryDir, "libproot.so").absolutePath,
-                        args = listOf(
-                            "--link2symlink",
-                            "-0",
-                            "-w",
-                            "/",
-                            "/system/bin/tar",
-                            "--no-same-owner",
-                            "--exclude=dev",
-                            "-xf",
-                            rootfsTar.absolutePath,
-                            "-C",
-                            rootfsDir.absolutePath,
-                        ),
-                        env = prootBaseEnv(nativeLibraryDir, baseDir),
-                    ),
-                )
-                if (!shellBin.exists()) {
-                    val directExtract = runner.run(
-                        ProotInvocation(
-                            executable = "/system/bin/tar",
-                            args = listOf(
-                                "-xf",
-                                rootfsTar.absolutePath,
-                                "-C",
-                                rootfsDir.absolutePath,
-                            ),
-                            env = emptyMap(),
-                        ),
-                    )
-                    if (!shellBin.exists()) {
-                        val detail = directExtract.stderr.trim()
-                            .ifEmpty { prootExtract.stderr.trim() }
-                            .ifEmpty { "exit code ${directExtract.exitCode}" }
-                        throw IllegalStateException("Failed to extract Ubuntu rootfs: $detail")
-                    }
-                }
+                extractRootfsTar(rootfsTar, shellBin)
                 prepareRootfsDirectories()
                 runCheckedInProot(
                     listOf(
@@ -240,7 +238,6 @@ internal class ProotDaemonManager(
             prepareRootfsDirectories()
         }
 
-        val installedVersion = if (versionFile.isFile) versionFile.readText().trim() else ""
         if (!daemonBin.exists() || installedVersion != versionName) {
             val tmpArchive = File(rootfsDir, "tmp/deskfleet-linux-arm64.tar.gz")
             try {
@@ -261,6 +258,50 @@ internal class ProotDaemonManager(
         if (!scrcpyJar.isFile) {
             downloader.download(SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
             scrcpyJar.setReadable(true, false)
+        }
+    }
+
+    private fun extractRootfsTar(rootfsTar: File, shellBin: File) {
+        rootfsDir.deleteRecursively()
+        rootfsDir.mkdirs()
+        val prootExtract = runner.run(
+            ProotInvocation(
+                executable = File(nativeLibraryDir, "libproot.so").absolutePath,
+                args = listOf(
+                    "--link2symlink",
+                    "-0",
+                    "-w",
+                    "/",
+                    "/system/bin/tar",
+                    "--no-same-owner",
+                    "--exclude=dev",
+                    "-xf",
+                    rootfsTar.absolutePath,
+                    "-C",
+                    rootfsDir.absolutePath,
+                ),
+                env = prootBaseEnv(nativeLibraryDir, baseDir),
+            ),
+        )
+        if (!shellBin.exists()) {
+            val directExtract = runner.run(
+                ProotInvocation(
+                    executable = "/system/bin/tar",
+                    args = listOf(
+                        "-xf",
+                        rootfsTar.absolutePath,
+                        "-C",
+                        rootfsDir.absolutePath,
+                    ),
+                    env = emptyMap(),
+                ),
+            )
+            if (!shellBin.exists()) {
+                val detail = directExtract.stderr.trim()
+                    .ifEmpty { prootExtract.stderr.trim() }
+                    .ifEmpty { "exit code ${directExtract.exitCode}" }
+                throw IllegalStateException("Failed to extract Ubuntu rootfs: $detail")
+            }
         }
     }
 
@@ -290,6 +331,7 @@ internal class ProotDaemonManager(
         tmpDir.setWritable(true, false)
         File(rootfsDir, "opt/deskfleet").mkdirs()
         File(rootfsDir, "var/lib/deskfleet").mkdirs()
+        File(rootfsDir, "root/workspace").mkdirs()
         workspaceDir.mkdirs()
         val etcDir = File(rootfsDir, "etc").apply { mkdirs() }
         val resolv = File(etcDir, "resolv.conf")
@@ -343,6 +385,7 @@ internal class ProotDaemonManager(
     }
 
     companion object {
+        const val EMBEDDED_ROOTFS_ASSET = "ubuntu-rootfs.tar.gz"
         const val UBUNTU_ROOTFS_URL = "https://partner-images.canonical.com/oci/noble/current/ubuntu-noble-oci-arm64-root.tar.gz"
         const val UBUNTU_ROOTFS_FALLBACK_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
         const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"
@@ -362,6 +405,7 @@ internal class ProotDaemonManager(
         ): ProotInvocation {
             val rootfsDir = File(baseDir, "rootfs")
             val dataDir = File(baseDir, "data")
+            val workspaceDir = File(baseDir, "workspace")
             return ProotInvocation(
                 executable = File(nativeLibraryDir, "libproot.so").absolutePath,
                 args = listOf(
@@ -378,6 +422,8 @@ internal class ProotDaemonManager(
                     "/sys",
                     "-b",
                     "${dataDir.absolutePath}:/var/lib/deskfleet",
+                    "-b",
+                    "${workspaceDir.absolutePath}:/root/workspace",
                     "-w",
                     "/root",
                     "/usr/bin/env",
