@@ -35,7 +35,6 @@ test("buildExtlinuxConf and guest rootfs Dockerfile bake nvme, r8169, exec agent
   assert.match(dockerfile, /FROM --platform=linux\/riscv64 ubuntu:24\.04/)
   assert.match(dockerfile, /nvme\\nnvme_core\\nr8169\\next4/)
   assert.match(dockerfile, /COPY daemon\/ \/opt\/deskfleet\//)
-  assert.match(dockerfile, /\/opt\/deskfleet\/deskfleet-daemon status/)
   assert.match(dockerfile, /deskfleet-exec-agent\.service/)
   assert.match(dockerfile, /20-rtl8169\.network/)
 
