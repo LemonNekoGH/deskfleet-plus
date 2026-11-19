@@ -313,13 +313,14 @@ export async function stageEmbeddedDaemonAssets(
   rmSync(join(assetsDir, "debian-rootfs.tar.gz"), { force: true })
   const tempRoot = mkdtempSync(join(tmpdir(), "deskfleet-android-daemon-"))
   try {
+    const scrcpyJar = join(assetsDir, EMBEDDED_SCRCPY_ASSET)
+    writeFileSync(scrcpyJar, await fetchBuffer(SCRCPY_SERVER_URL))
+
     const rawArchive = join(tempRoot, "deskfleet-linux-arm64.tar.gz")
     await downloadDaemonArchive(rawArchive, version)
     const daemonArchive = join(assetsDir, EMBEDDED_DAEMON_ASSET)
     repackageDaemonArchive(rawArchive, daemonArchive)
 
-    const scrcpyJar = join(assetsDir, EMBEDDED_SCRCPY_ASSET)
-    writeFileSync(scrcpyJar, await fetchBuffer(SCRCPY_SERVER_URL))
     if (!existsSync(daemonArchive) || !existsSync(scrcpyJar)) {
       throw new Error(`Expected embedded daemon or scrcpy asset was not created under ${assetsDir}`)
     }
