@@ -370,9 +370,15 @@ if (import.meta.main) {
   const prootFiles = await stageTermuxProotBinaries(outDir, readelfBin)
   console.log(`Staged ${targetSo} and ${prootFiles.length} proot binaries (NDK ${basename(ndkRoot)}, API ${MIN_ANDROID_API}, 16 KB aligned)`)
 
+  const assetsDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/assets")
+  mkdirSync(assetsDir, { recursive: true })
+  const noticesSource = join(repoRoot, "THIRD_PARTY_NOTICES.md")
+  if (existsSync(noticesSource)) {
+    copyFileSync(noticesSource, join(assetsDir, "THIRD_PARTY_NOTICES.md"))
+  }
+
   if (release || process.env.DESKFLEET_ANDROID_BUNDLE_DAEMON === "1") {
     const webPackageJson = JSON.parse(readFileSync(join(repoRoot, "apps/web/package.json"), "utf8")) as { version: string }
-    const assetsDir = join(repoRoot, "packages/capacitor-bridge/android/src/main/assets")
     const staged = await stageEmbeddedDaemonAssets(assetsDir, webPackageJson.version)
     console.log(`Staged embedded daemon (${staged.daemonArchive}) and scrcpy (${staged.scrcpyJar})`)
   }
