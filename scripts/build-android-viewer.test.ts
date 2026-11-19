@@ -130,9 +130,13 @@ test("extractDebMember extracts a member from an ar archive with even padding", 
   assert.throws(() => extractDebMember(deb, "missing"), /missing/)
 })
 
-test("buildEmbeddedRootfsDockerfile installs deps, daemon, scrcpy, and converts hardlinks", () => {
+test("buildEmbeddedRootfsDockerfile installs deps, daemon, scrcpy, keeps copyrights, and converts hardlinks", () => {
   const dockerfile = buildEmbeddedRootfsDockerfile()
-  assert.match(dockerfile, /FROM --platform=linux\/arm64 ubuntu:24\.04/)
+  assert.match(dockerfile, /FROM --platform=linux\/arm64 debian:trixie-slim/)
+  assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM debian:trixie-slim/)
+  assert.match(dockerfile, /\/debian-rootfs\.tar\.gz/)
+  assert.match(dockerfile, /! -name copyright/)
+  assert.doesNotMatch(dockerfile, /rm -rf.*\/usr\/share\/doc\/\*/)
   assert.match(dockerfile, /\bca-certificates\b/)
   assert.match(dockerfile, /\bgit\b/)
   assert.match(dockerfile, /\bcurl\b/)

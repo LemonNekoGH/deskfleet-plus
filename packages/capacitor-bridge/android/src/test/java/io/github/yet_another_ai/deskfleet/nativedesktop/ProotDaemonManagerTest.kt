@@ -202,7 +202,7 @@ class ProotDaemonManagerTest {
             downloader = object : AssetDownloader {
                 override fun download(url: String, destination: File, gunzip: Boolean) {
                     downloadedUrls += url
-                    if (url == ProotDaemonManager.UBUNTU_ROOTFS_URL) {
+                    if (url == ProotDaemonManager.DEBIAN_ROOTFS_URL) {
                         throw IllegalStateException("Download failed (404) for $url")
                     }
                     destination.parentFile?.mkdirs()
@@ -215,8 +215,8 @@ class ProotDaemonManagerTest {
 
         assertEquals(
             listOf(
-                ProotDaemonManager.UBUNTU_ROOTFS_URL,
-                ProotDaemonManager.UBUNTU_ROOTFS_FALLBACK_URL,
+                ProotDaemonManager.DEBIAN_ROOTFS_URL,
+                ProotDaemonManager.DEBIAN_ROOTFS_FALLBACK_URL,
                 "https://github.com/yet-another-ai/deskfleet/releases/download/v0.18.2/deskfleet-linux-arm64.tar.gz",
                 ProotDaemonManager.SCRCPY_SERVER_URL,
             ),
@@ -283,6 +283,6 @@ class ProotDaemonManagerTest {
         assertFalse(invokedCommands.any { args -> args.any { it.contains("apt-get") } })
         assertTrue(File(baseDir, "workspace").isDirectory)
         assertEquals("0.18.2", File(baseDir, "version").readText())
-        assertFalse(File(cacheDir, "ubuntu-rootfs.tar").exists())
+        assertFalse(File(cacheDir, "debian-rootfs.tar").exists())
     }
 }
