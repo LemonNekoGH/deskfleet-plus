@@ -78,7 +78,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         androidResources {
             ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
-            noCompress += listOf("gz", "tgz", "tar")
+            noCompress += listOf("gz", "tgz", "tar", "jar")
         }
     }
 

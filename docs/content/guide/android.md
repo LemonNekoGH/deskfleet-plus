@@ -75,4 +75,4 @@ To avoid starting the daemon manually after opening Termux or rebooting:
 
 1. Install the third-party **`DeskFleet Plus`** APK (`moe.remon.deskfleet.plus`, separate from the official `ai.yetanother.deskfleet` app).
 2. Sign in inside the app, open **Add machine → This computer**, and confirm enrollment.
-3. The app automatically provisions a bundled Debian `arm64` `proot` container with `deskfleet-daemon` inside its private sandbox, runs it in a foreground service with wake lock, and enrolls the device with your Team without root or manual CLI steps.
+3. The app automatically initializes a Debian `arm64` `proot` container inside its private sandbox, installs the bundled `deskfleet-daemon` and `scrcpy-server`, runs the daemon in a foreground service with wake lock, and enrolls the device with your Team without root or manual CLI steps.
