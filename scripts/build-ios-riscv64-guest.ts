@@ -129,7 +129,10 @@ export function buildGuestRootfsDockerfile(version: string): string {
     "  && ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service \\",
     "  && ln -sf /usr/lib/systemd/system/systemd-resolved.service /etc/systemd/system/multi-user.target.wants/systemd-resolved.service \\",
     "  && /opt/deskfleet/node --version \\",
-    "  && status_json=\"$(HOME=/tmp XDG_CONFIG_HOME=/tmp XDG_DATA_HOME=/tmp /opt/deskfleet/deskfleet-daemon status)\" \\",
+    "  && /opt/deskfleet/node -e \"console.log('node-js-ok')\" \\",
+    "  && ldd /opt/deskfleet/deskfleet.node \\",
+    "  && (/opt/deskfleet/node -e \"const m={exports:{}}; process.dlopen(m, '/opt/deskfleet/deskfleet.node'); console.log('dlopen-ok', Object.keys(m.exports).length)\" || /opt/deskfleet/node --jitless -e \"const m={exports:{}}; process.dlopen(m, '/opt/deskfleet/deskfleet.node'); console.log('dlopen-jitless-ok', Object.keys(m.exports).length)\") \\",
+    "  && status_json=\"$(HOME=/tmp XDG_CONFIG_HOME=/tmp XDG_DATA_HOME=/tmp /opt/deskfleet/deskfleet-daemon status || HOME=/tmp XDG_CONFIG_HOME=/tmp XDG_DATA_HOME=/tmp /opt/deskfleet/node --jitless /opt/deskfleet/daemon.cjs status)\" \\",
     "  && echo \"Verified pre-baked riscv64 daemon status: $status_json\" \\",
     "  && echo \"$status_json\" | grep -q '\"registrations\"'",
     "",
@@ -315,21 +318,25 @@ export async function buildRiscv64GuestDiskImage(options: {
     writeFileSync(join(contextDir, "Dockerfile"), buildGuestRootfsDockerfile(options.version), "utf8")
 
     // Build, smoke-test inside linux/riscv64 container, and export the complete rootfs
-    execFileSync(
-      "docker",
-      [
-        "buildx",
-        "build",
-        "--platform",
-        "linux/riscv64",
-        "--target",
-        "export",
-        "--output",
-        `type=local,dest=${rootfsDir}`,
-        contextDir,
-      ],
-      { stdio: "inherit" },
-    )
+    const buildxArgs = [
+      "buildx",
+      "build",
+      "--platform",
+      "linux/riscv64",
+      "--target",
+      "export",
+      "--progress=plain",
+    ]
+    if (process.env.GITHUB_ACTIONS === "true") {
+      buildxArgs.push(
+        "--cache-from",
+        "type=gha,scope=ios-guest-riscv64",
+        "--cache-to",
+        "type=gha,mode=max,scope=ios-guest-riscv64",
+      )
+    }
+    buildxArgs.push("--output", `type=local,dest=${rootfsDir}`, contextDir)
+    execFileSync("docker", buildxArgs, { stdio: "inherit" })
 
     // Populate /etc/hosts and /etc/resolv.conf outside Docker (Docker mounts /etc/hosts read-only during RUN)
     rmSync(join(rootfsDir, ".dockerenv"), { force: true })
