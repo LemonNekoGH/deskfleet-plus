@@ -58,7 +58,7 @@ internal class WirelessAdbController private constructor(
     private val activeInfoCallbacks = ConcurrentHashMap<String, NsdManager.ServiceInfoCallback>()
     private val localServicePorts = ConcurrentHashMap<String, Int>()
 
-    private val commandRunner = object : WirelessAdbCommandRunner {
+    private val commandRunner: WirelessAdbCommandRunner = object : WirelessAdbCommandRunner {
         override fun isAdbAvailable(): Boolean = adbBin.exists()
 
         override fun runAdb(vararg args: String): ShellResult {
@@ -83,7 +83,7 @@ internal class WirelessAdbController private constructor(
         }
     }
 
-    private val notifier = object : WirelessAdbNotifier {
+    private val notifier: WirelessAdbNotifier = object : WirelessAdbNotifier {
         override fun showSearchingPairingNotification() {
             postPairingNotification(
                 title = "Wireless ADB pairing ready",
@@ -139,7 +139,7 @@ internal class WirelessAdbController private constructor(
         }
     }
 
-    val manager = WirelessAdbManager(
+    val manager: WirelessAdbManager = WirelessAdbManager(
         filesDir = filesDir,
         commandRunner = commandRunner,
         notifier = notifier,
@@ -253,7 +253,7 @@ internal class WirelessAdbController private constructor(
         executor.execute {
             if (!monitoring) return@execute
             val active = connectivityManager?.activeNetwork
-            val caps = active?.let { connectivityManager?.getNetworkCapabilities(it) }
+            val caps = active?.let { connectivityManager.getNetworkCapabilities(it) }
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
                 restartDiscoveryIfMonitoring(WirelessAdbManager.SERVICE_TYPE_CONNECT)
             }

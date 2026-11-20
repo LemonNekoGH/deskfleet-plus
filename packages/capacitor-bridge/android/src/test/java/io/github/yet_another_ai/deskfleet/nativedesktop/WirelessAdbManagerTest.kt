@@ -337,7 +337,7 @@ class WirelessAdbManagerTest {
             filesDir = tempDir,
             commandRunner = object : WirelessAdbCommandRunner {
                 override fun isAdbAvailable(): Boolean = false
-                override fun runAdb(vararg args: String): ShellResult = fail("runAdb should not be called")
+                override fun runAdb(vararg args: String): ShellResult = throw AssertionError("runAdb should not be called")
                 override fun refreshDaemonCapabilities() = fail("refreshDaemonCapabilities should not be called")
             },
             notifier = RecordingNotifier(),
