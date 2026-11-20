@@ -5,10 +5,10 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { AppStoreConnect, requiredEnv } from "./app-store-connect.ts"
 
-const appGroup = "group.ai.yetanother.deskfleet"
+const appGroup = "group.moe.remon.deskfleet.plus"
 const targets = [
-  { bundleId: "ai.yetanother.deskfleet", variable: "IOS_APP_PROFILE_NAME", output: "DESKFLEET_IOS_APP_PROFILE_UUID" },
-  { bundleId: "ai.yetanother.deskfleet.BroadcastUpload", variable: "IOS_BROADCAST_PROFILE_NAME", output: "DESKFLEET_IOS_BROADCAST_PROFILE_UUID" },
+  { bundleId: "moe.remon.deskfleet.plus", variable: "IOS_APP_PROFILE_NAME", output: "DESKFLEET_IOS_APP_PROFILE_UUID" },
+  { bundleId: "moe.remon.deskfleet.plus.BroadcastUpload", variable: "IOS_BROADCAST_PROFILE_NAME", output: "DESKFLEET_IOS_BROADCAST_PROFILE_UUID" },
 ] as const
 
 export interface ProfileResource {

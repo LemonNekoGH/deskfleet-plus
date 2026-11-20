@@ -81,7 +81,7 @@ void *rvvm_ram_donor_alloc(size_t size) {
     __block xpc_object_t receivedShmem = nil;
     __block xpc_connection_t clientConn = nil;
 
-    dispatch_queue_t xpcQueue = dispatch_queue_create("ai.yetanother.deskfleet.ram-donor", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_t xpcQueue = dispatch_queue_create("moe.remon.deskfleet.plus.ram-donor", DISPATCH_QUEUE_SERIAL);
     xpc_connection_t listener = xpc_connection_create(NULL, xpcQueue);
     xpc_endpoint_t endpoint = xpc_endpoint_create(listener);
 

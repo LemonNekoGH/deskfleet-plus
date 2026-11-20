@@ -153,7 +153,7 @@ test("buildStaticFrameworkBundle produces a framework module that avoids include
     const fw = buildStaticFrameworkBundle({
       outputDir: join(workDir, "out"),
       frameworkName: "IshPlusRPPairing",
-      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
       staticLibPath: libPath,
       headerSourcePath: hdrPath,
       headerFileName: "ishplus_rppairing.h",
@@ -264,7 +264,7 @@ test("pinned iOS librvvm artifacts, patch, Xcode wiring, and notices exclude GPL
 
   const pbxproj = readFileSync(join(repoRoot, "apps/web/ios/App/App.xcodeproj/project.pbxproj"), "utf8")
   assert.match(pbxproj, /DeskFleetJITHelper/)
-  assert.match(pbxproj, /ai\.yetanother\.deskfleet\.jit-helper/)
+  assert.match(pbxproj, /moe\.remon\.deskfleet\.plus\.jit-helper/)
   assert.match(pbxproj, /StikJIT\.xcframework.*platformFilter = ios;/)
   assert.match(pbxproj, /fw_payload\.bin fw_jump\.bin/)
   assert.doesNotMatch(pbxproj, /libqemu|iSHJITHelper/i)

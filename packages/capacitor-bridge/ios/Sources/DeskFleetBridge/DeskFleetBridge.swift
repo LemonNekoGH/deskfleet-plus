@@ -489,7 +489,7 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
             self.startDeadlineMs = OutlineAudioSharedStore.nowMs() + 2_000
 
             let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
-            picker.preferredExtension = "\(Bundle.main.bundleIdentifier ?? "ai.yetanother.deskfleet").BroadcastUpload"
+            picker.preferredExtension = "\(Bundle.main.bundleIdentifier ?? "moe.remon.deskfleet.plus").BroadcastUpload"
             picker.showsMicrophoneButton = false
             picker.isHidden = true
             picker.isUserInteractionEnabled = false

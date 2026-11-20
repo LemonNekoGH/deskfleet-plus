@@ -22,7 +22,7 @@ function fixture(context: TestContext) {
 
 test("iOS versions retain the marketing version and allocate a build once per workflow attempt", () => {
   assert.deepEqual(iosRelease("0.16.0-rc.1", { GITHUB_RUN_NUMBER: "1234", GITHUB_RUN_ATTEMPT: "2" }), {
-    bundleId: "ai.yetanother.deskfleet", version: "0.16.0", buildNumber: "1234.2", ipa: "App.ipa",
+    bundleId: "moe.remon.deskfleet.plus", version: "0.16.0", buildNumber: "1234.2", ipa: "App.ipa",
   })
   assert.equal(iosRelease("0.16.0", { GITHUB_RUN_NUMBER: "1234", GITHUB_RUN_ATTEMPT: "3" }).buildNumber, "1234.3")
   assert.equal(iosRelease("0.16.0", { GITHUB_RUN_NUMBER: "1235", GITHUB_RUN_ATTEMPT: "1" }).buildNumber, "1235.1")
@@ -65,11 +65,11 @@ test("manual archive and export reuse the prepared identity and both profiles wi
   assert.ok(calls.flat().every(arg => !/^(?:-allowProvisioning|-authentication|PROVISIONING_PROFILE|CODE_SIGN_IDENTITY=)/u.test(arg)))
   assert.match(options, /<key>signingStyle<\/key><string>manual<\/string>/u)
   assert.ok(options.includes(`<key>signingCertificate</key><string>${signing.DESKFLEET_IOS_SIGNING_IDENTITY}</string>`))
-  assert.ok(options.includes(`<key>ai.yetanother.deskfleet</key><string>${signing.DESKFLEET_IOS_APP_PROFILE_UUID}</string>`))
-  assert.ok(options.includes(`<key>ai.yetanother.deskfleet.BroadcastUpload</key><string>${signing.DESKFLEET_IOS_BROADCAST_PROFILE_UUID}</string>`))
+  assert.ok(options.includes(`<key>moe.remon.deskfleet.plus</key><string>${signing.DESKFLEET_IOS_APP_PROFILE_UUID}</string>`))
+  assert.ok(options.includes(`<key>moe.remon.deskfleet.plus.BroadcastUpload</key><string>${signing.DESKFLEET_IOS_BROADCAST_PROFILE_UUID}</string>`))
   assert.match(options, /<key>manageAppVersionAndBuildNumber<\/key><false\/>/u)
   assert.deepEqual(JSON.parse(readFileSync(join(app, "output/release.json"), "utf8")), {
-    bundleId: "ai.yetanother.deskfleet", version: "0.16.0", buildNumber: "1234.2", ipa: "App.ipa",
+    bundleId: "moe.remon.deskfleet.plus", version: "0.16.0", buildNumber: "1234.2", ipa: "App.ipa",
   })
   assert.equal(existsSync(join(app, "App.xcarchive")), false)
   assert.equal(existsSync(join(app, "ExportOptions.plist")), false)

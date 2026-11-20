@@ -87,7 +87,7 @@
         return;
     }
 
-    dispatch_queue_t queue = dispatch_queue_create("ai.yetanother.deskfleet.ram-donor.helper", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_t queue = dispatch_queue_create("moe.remon.deskfleet.plus.ram-donor.helper", DISPATCH_QUEUE_SERIAL);
     xpc_connection_t conn = xpc_connection_create_from_endpoint(endpoint);
     xpc_connection_set_target_queue(conn, queue);
 

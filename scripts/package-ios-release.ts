@@ -4,7 +4,7 @@ import { join, resolve } from "node:path"
 import { readReleaseVersions } from "./release-version.ts"
 
 export interface IosRelease {
-  bundleId: "ai.yetanother.deskfleet"
+  bundleId: "moe.remon.deskfleet.plus"
   version: string
   buildNumber: string
   ipa: "App.ipa"
@@ -38,7 +38,7 @@ export function iosRelease(version: string, env: NodeJS.ProcessEnv): IosRelease 
   if (!/^[1-9]\d*(?:\.(?:0|[1-9]\d*)){0,2}$/u.test(buildNumber)) {
     throw new Error("IOS_BUILD_NUMBER must contain one to three non-negative integers, beginning with a positive integer")
   }
-  return { bundleId: "ai.yetanother.deskfleet", version: core, buildNumber, ipa: "App.ipa" }
+  return { bundleId: "moe.remon.deskfleet.plus", version: core, buildNumber, ipa: "App.ipa" }
 }
 
 function signingConfiguration(env: NodeJS.ProcessEnv): IosSigning {
@@ -67,8 +67,8 @@ function exportOptions(signing: IosSigning): string {
   <key>signingCertificate</key><string>${xml(signing.identity)}</string>
   <key>provisioningProfiles</key>
   <dict>
-    <key>ai.yetanother.deskfleet</key><string>${xml(signing.appProfile)}</string>
-    <key>ai.yetanother.deskfleet.BroadcastUpload</key><string>${xml(signing.broadcastProfile)}</string>
+    <key>moe.remon.deskfleet.plus</key><string>${xml(signing.appProfile)}</string>
+    <key>moe.remon.deskfleet.plus.BroadcastUpload</key><string>${xml(signing.broadcastProfile)}</string>
   </dict>
   <key>manageAppVersionAndBuildNumber</key><false/>
   <key>uploadSymbols</key><true/>

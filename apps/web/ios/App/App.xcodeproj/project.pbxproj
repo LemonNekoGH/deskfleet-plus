@@ -560,7 +560,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-DDEBUG\"";
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 6.0;
@@ -583,7 +583,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(DESKFLEET_IOS_APP_PROFILE_UUID)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -609,7 +609,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.BroadcastUpload;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus.BroadcastUpload;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -635,7 +635,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.BroadcastUpload;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus.BroadcastUpload;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(DESKFLEET_IOS_BROADCAST_PROFILE_UUID)";
 				SKIP_INSTALL = YES;
@@ -662,7 +662,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.jit-helper;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus.jit-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -687,7 +687,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = ai.yetanother.deskfleet.jit-helper;
+				PRODUCT_BUNDLE_IDENTIFIER = moe.remon.deskfleet.plus.jit-helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

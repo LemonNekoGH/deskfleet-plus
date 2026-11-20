@@ -6,7 +6,7 @@ import UIKit
 /// Manages the embedded pure-JIT librvvm (RISC-V 64-bit) Linux guest and DeskFleet daemon
 /// on iOS, mirroring Android's ProotDaemonManager contract.
 internal final class RvvmDaemonManager {
-    private static let appGroupId = "group.ai.yetanother.deskfleet"
+    private static let appGroupId = "group.moe.remon.deskfleet.plus"
     private static let defaultForkReleaseBase = "https://github.com/LemonNekoGH/deskfleet-plus/releases/download/ios-guest-riscv64"
     private static let defaultMemoryBytes: Int = 512 * 1024 * 1024
     private static let defaultVcpuCount: Int = 2

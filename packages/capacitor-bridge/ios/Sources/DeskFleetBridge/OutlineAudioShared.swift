@@ -3,7 +3,7 @@ import Foundation
 
 /// Cross-process 512-byte memory-mapped spectrum file inside the shared App Group container.
 final class OutlineAudioSharedStore {
-    static let appGroupId = "group.ai.yetanother.deskfleet"
+    static let appGroupId = "group.moe.remon.deskfleet.plus"
     static let spectrumBins = 224
     static let stereoSpectrumBytes = spectrumBins * 2
     static let heartbeatTimeoutMs: UInt64 = 5_000

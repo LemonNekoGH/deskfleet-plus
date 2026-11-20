@@ -9,7 +9,7 @@ function fixture(context: TestContext): string {
   const directory = mkdtempSync(join(tmpdir(), "deskfleet-publish-ios-test-"))
   context.after(() => rmSync(directory, { recursive: true, force: true }))
   writeFileSync(join(directory, "release.json"), JSON.stringify({
-    bundleId: "ai.yetanother.deskfleet", version: "0.15.0", buildNumber: "1", ipa: "App.ipa",
+    bundleId: "moe.remon.deskfleet.plus", version: "0.15.0", buildNumber: "1", ipa: "App.ipa",
   }))
   writeFileSync(join(directory, "App.ipa"), "signed release fixture")
   return directory
@@ -64,7 +64,7 @@ test("completed delivery skips uploading and uses the artifact's version identit
   assert.deepEqual(await publishIosRelease(directory, run.dependencies), { uploadId: "delivery-1", uploaded: false })
   assert.equal(run.uploads.length, 0)
   assert.equal(run.elapsed(), 0)
-  assert.equal(run.requests[0]!.searchParams.get("filter[bundleId]"), "ai.yetanother.deskfleet")
+  assert.equal(run.requests[0]!.searchParams.get("filter[bundleId]"), "moe.remon.deskfleet.plus")
   assert.equal(run.requests[1]!.searchParams.get("filter[cfBundleShortVersionString]"), "0.15.0")
   assert.equal(run.requests[1]!.searchParams.get("filter[cfBundleVersion]"), "1")
   assert.equal(run.requests[1]!.searchParams.get("filter[platform]"), "IOS")

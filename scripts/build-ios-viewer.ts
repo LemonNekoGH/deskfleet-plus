@@ -693,7 +693,7 @@ export function buildRppairingXcframework(repoRoot: string, frameworksDir: strin
     const deviceFw = buildStaticFrameworkBundle({
       outputDir: join(simTemp, "device"),
       frameworkName: "IshPlusRPPairing",
-      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
       staticLibPath: deviceLib,
       headerSourcePath: headerSrc,
       headerFileName: "ishplus_rppairing.h",
@@ -702,7 +702,7 @@ export function buildRppairingXcframework(repoRoot: string, frameworksDir: strin
     const simFw = buildStaticFrameworkBundle({
       outputDir: join(simTemp, "simulator"),
       frameworkName: "IshPlusRPPairing",
-      bundleId: "ai.yetanother.deskfleet.IshPlusRPPairing",
+      bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
       staticLibPath: simLib,
       headerSourcePath: headerSrc,
       headerFileName: "ishplus_rppairing.h",

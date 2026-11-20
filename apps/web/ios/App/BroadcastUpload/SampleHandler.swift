@@ -77,7 +77,7 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         heartbeatTimer = nil
         store?.markBroadcastStopped()
         finishBroadcastWithError(NSError(
-            domain: "ai.yetanother.deskfleet.BroadcastUpload",
+            domain: "moe.remon.deskfleet.plus.BroadcastUpload",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "Audio-reactive outline was turned off in DeskFleet."]
         ))

@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 final class LocalFilesBridge: NSObject, UIDocumentPickerDelegate, @unchecked Sendable {
     private final class Session: @unchecked Sendable {
         let endpoint: LocalFilesEndpoint
-        let queue = DispatchQueue(label: "ai.yetanother.deskfleet.files", qos: .userInitiated)
+        let queue = DispatchQueue(label: "moe.remon.deskfleet.plus.files", qos: .userInitiated)
         init(_ endpoint: LocalFilesEndpoint) { self.endpoint = endpoint }
     }
     private let lock = NSLock()

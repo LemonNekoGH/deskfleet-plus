@@ -7,7 +7,7 @@ import UserNotifications
 
 internal final class RvvmOnDevicePairing: NSObject, NetServiceDelegate {
     private var advertisedService: NetService?
-    private let workQueue = DispatchQueue(label: "ai.yetanother.deskfleet.rppairing")
+    private let workQueue = DispatchQueue(label: "moe.remon.deskfleet.plus.rppairing")
     private var active = false
 
     static var isSupportedOnCurrentOS: Bool {

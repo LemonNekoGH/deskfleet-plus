@@ -54,7 +54,7 @@ static NSString *const kDeskFleetJitHelperSuffix = @".jit-helper";
     }
 
     __block BOOL finished = NO;
-    dispatch_queue_t guardQueue = dispatch_queue_create("ai.yetanother.deskfleet.jit-helper.guard", DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_t guardQueue = dispatch_queue_create("moe.remon.deskfleet.plus.jit-helper.guard", DISPATCH_QUEUE_SERIAL);
     void (^finishOnce)(BOOL, NSString *) = ^(BOOL ok, NSString *err) {
         __block BOOL shouldCall = NO;
         dispatch_sync(guardQueue, ^{

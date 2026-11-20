@@ -8,7 +8,7 @@ import test from "node:test"
 import { decodeProfile, selectProfile, validateProfile, type ProfileResource, type SigningProfile } from "./prepare-ios-signing.ts"
 
 const team = "TEAM123456"
-const bundle = "ai.yetanother.deskfleet"
+const bundle = "moe.remon.deskfleet.plus"
 const fingerprint = "A".repeat(40)
 const now = Date.parse("2026-01-01T00:00:00Z")
 function profile(): SigningProfile {
@@ -16,7 +16,7 @@ function profile(): SigningProfile {
     name: "DeskFleet App Store", uuid: "00000000-0000-0000-0000-000000000001",
     teamIdentifiers: [team], applicationIdentifierPrefixes: ["LEGACYPREF"],
     expirationDate: "2027-01-01T00:00:00Z", certificateSHA1: fingerprint,
-    entitlements: { "application-identifier": `LEGACYPREF.${bundle}`, "get-task-allow": false, "com.apple.security.application-groups": ["group.ai.yetanother.deskfleet"] },
+    entitlements: { "application-identifier": `LEGACYPREF.${bundle}`, "get-task-allow": false, "com.apple.security.application-groups": ["group.moe.remon.deskfleet.plus"] },
     provisionedDevices: false, provisionsAllDevices: false,
   }
 }
@@ -75,7 +75,7 @@ test("macOS decodes CMS profile certificates, dates, and App Group entitlements"
 <key>ExpirationDate</key><date>2027-01-01T00:00:00Z</date>
 <key>DeveloperCertificates</key><array><data>${cert.raw.toString("base64")}</data></array>
 <key>Entitlements</key><dict><key>application-identifier</key><string>${team}.${bundle}</string>
-<key>get-task-allow</key><false/><key>com.apple.security.application-groups</key><array><string>group.ai.yetanother.deskfleet</string></array></dict>
+<key>get-task-allow</key><false/><key>com.apple.security.application-groups</key><array><string>group.moe.remon.deskfleet.plus</string></array></dict>
 </dict></plist>`)
   execFileSync("openssl", ["smime", "-sign", "-in", plist, "-out", cms, "-signer", certificate, "-inkey", key, "-outform", "DER", "-nodetach"], { stdio: "pipe" })
   const decoded = decodeProfile(cms)
