@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -11,7 +10,6 @@ import {
   MIN_ANDROID_API,
   MIN_NDK_MAJOR,
   patchCStringInPlace,
-  repackageDaemonArchive,
   verifyElfLoadAlignment,
 } from "./build-android-viewer.ts"
 
@@ -129,39 +127,4 @@ test("extractDebMember extracts a member from an ar archive with even padding", 
   assert.deepEqual(extractDebMember(deb, "data.tar.xz"), Buffer.from("xz-bytes"))
   assert.deepEqual(extractDebMember(deb, "odd"), Buffer.from("abc"))
   assert.throws(() => extractDebMember(deb, "missing"), /missing/)
-})
-
-test("repackageDaemonArchive strips deskfleet-server and preserves daemon and dsh runtime", context => {
-  const root = mkdtempSync(join(tmpdir(), "deskfleet-daemon-repack-test-"))
-  context.after(() => rmSync(root, { recursive: true, force: true }))
-
-  const srcDir = join(root, "src")
-  mkdirSync(join(srcDir, "dsh"), { recursive: true })
-  writeFileSync(join(srcDir, "deskfleet-server"), "server-bin")
-  writeFileSync(join(srcDir, "deskfleet-daemon"), "daemon-bin")
-  writeFileSync(join(srcDir, "dsh", "entry.js"), "console.log('dsh')\n")
-
-  const inputArchive = join(root, "input.tar.gz")
-  execFileSync("tar", ["-czf", inputArchive, "-C", srcDir, "."])
-
-  const outputArchive = join(root, "out", "deskfleet-daemon-linux-arm64.tar.gz")
-  repackageDaemonArchive(inputArchive, outputArchive)
-
-  const verifyDir = join(root, "verify")
-  mkdirSync(verifyDir, { recursive: true })
-  execFileSync("tar", ["-xzf", outputArchive, "-C", verifyDir])
-
-  assert.equal(existsSync(join(verifyDir, "deskfleet-daemon")), true)
-  assert.equal(existsSync(join(verifyDir, "dsh", "entry.js")), true)
-  assert.equal(existsSync(join(verifyDir, "deskfleet-server")), false)
-
-  const missingDaemonDir = join(root, "missing-daemon")
-  mkdirSync(missingDaemonDir, { recursive: true })
-  writeFileSync(join(missingDaemonDir, "deskfleet-server"), "only-server")
-  const invalidArchive = join(root, "invalid.tar.gz")
-  execFileSync("tar", ["-czf", invalidArchive, "-C", missingDaemonDir, "."])
-  assert.throws(
-    () => repackageDaemonArchive(invalidArchive, join(root, "invalid-out.tar.gz")),
-    /does not contain deskfleet-daemon/,
-  )
 })

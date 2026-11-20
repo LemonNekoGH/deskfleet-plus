@@ -592,7 +592,7 @@ internal class ProotDaemonManager(
     }
 
     companion object {
-        const val EMBEDDED_DAEMON_ASSET = "deskfleet-daemon-linux-arm64.tar.gz"
+        const val EMBEDDED_DAEMON_ASSET = "deskfleet-daemon-linux-arm64.tgz"
         const val EMBEDDED_SCRCPY_ASSET = "scrcpy-server.jar"
         const val DEBIAN_ROOTFS_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/slim/oci/blobs/rootfs.tar.gz"
         const val DEBIAN_ROOTFS_FALLBACK_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/oci/blobs/rootfs.tar.gz"

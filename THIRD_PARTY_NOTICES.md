@@ -68,7 +68,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## 4. `scrcpy-server` (`v3.1`)
 
-- **Packaged file** (release builds): `assets/scrcpy-server.jar`
+- **Packaged file**: `assets/scrcpy-server.jar`
 - **License**: `Apache-2.0`
 - **Copyright**: Genymobile and Romain Vimont (`Genymobile/scrcpy`)
 - **Source**: `https://github.com/Genymobile/scrcpy/tree/v3.1`
@@ -77,11 +77,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## 5. `deskfleet-daemon` & bundled runtime (`dsh`)
 
-- **Packaged file** (release builds): `assets/deskfleet-daemon-linux-arm64.tar.gz`
+- **Packaged file**: `assets/deskfleet-daemon-linux-arm64.tgz`
 - **License**: `Apache-2.0` (`yet-another-ai/deskfleet`), with bundled Node.js runtime (`MIT`) and `@deepseek-ai/dsh` (`MIT`)
 - **Source**: `https://github.com/yet-another-ai/deskfleet`
-- **Build-time modifications**: `deskfleet-server` is removed via `repackageDaemonArchive` in `scripts/build-android-viewer.ts`.
+- **Build-time modifications**: `deskfleet-server` is removed when staging `deskfleet-daemon-linux-arm64.tgz` in `packages/capacitor-bridge/android/build.gradle.kts`.
 
 ## Corresponding Source Notice
 
-Full build scripts and ELF string patching code are provided in `scripts/build-android-viewer.ts`. Public binary releases should retain access to the corresponding source archives for `proot` (`5.1.107.102`) and `libtalloc` (`2.5.0`) in accordance with GPL-2.0 and LGPL-3.0.
+Full build scripts and ELF string patching code are provided in `scripts/build-android-viewer.ts` and `packages/capacitor-bridge/android/build.gradle.kts`. Public binary releases should retain access to the corresponding source archives for `proot` (`5.1.107.102`) and `libtalloc` (`2.5.0`) in accordance with GPL-2.0 and LGPL-3.0.
