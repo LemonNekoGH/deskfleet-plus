@@ -33,6 +33,7 @@ class LocalDaemonService : Service() {
         startForegroundNotification()
         acquireWakeLock()
         startDaemonLoopIfNeeded()
+        WirelessAdbController.get(applicationContext).startBackgroundMonitoring()
         return START_STICKY
     }
 
@@ -111,6 +112,7 @@ class LocalDaemonService : Service() {
 
     private fun stopDaemonLoop(callStopSelf: Boolean) {
         isActive = false
+        WirelessAdbController.get(applicationContext).stopBackgroundMonitoring()
         activeProcess?.let { process ->
             activeProcess = null
             runCatching { process.destroy() }

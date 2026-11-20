@@ -2,6 +2,7 @@ package io.github.yet_another_ai.deskfleet.nativedesktop
 
 import android.Manifest
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
@@ -11,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.Surface
 import androidx.activity.result.ActivityResult
@@ -31,13 +33,28 @@ import java.util.UUID
 
 @CapacitorPlugin(
     name = "DeskFleetBridge",
-    permissions = [Permission(strings = [Manifest.permission.RECORD_AUDIO], alias = "audio")],
+    permissions = [
+        Permission(strings = [Manifest.permission.RECORD_AUDIO], alias = "audio"),
+        Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = "notifications"),
+    ],
 )
 class DeskFleetBridge : Plugin() {
     private var speechInput: SpeechInput? = null
     private var nativeFiles: NativeFilesBridge? = null
     private var firebaseTelemetry: FirebaseTelemetryBridge? = null
     private var prootDaemon: ProotDaemonManager? = null
+    private var stopWirelessAdbListener: (() -> Unit)? = null
+
+    override fun load() {
+        super.load()
+        stopWirelessAdbListener?.invoke()
+        stopWirelessAdbListener = WirelessAdbController.get(context.applicationContext).addStateListener { state ->
+            notifyListeners("wirelessAdbState", JSObject(state.toJson().toString()))
+        }
+        if (ProotDaemonManager.hasSavedRegistrations(context.filesDir) && !LocalDaemonService.isActive) {
+            runCatching { LocalDaemonService.start(context) }
+        }
+    }
 
     private fun files(): NativeFilesBridge = nativeFiles ?: NativeFilesBridge(context).also { nativeFiles = it }
     private fun telemetry(): FirebaseTelemetryBridge =
@@ -106,6 +123,117 @@ class DeskFleetBridge : Plugin() {
             runCatching { JSObject(daemon().enroll(serverUrl, credentialsJson)) }
                 .fold(call::resolve) { call.reject(it.message ?: "Failed to enroll daemon") }
         }.start()
+    }
+
+    @PluginMethod
+    fun localDaemonGetRemoteAgentSettings(call: PluginCall) {
+        Thread {
+            runCatching {
+                JSObject(LocalRemoteAgentSettings.fromFilesDir(context.filesDir).read().toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to read Remote Agent settings") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun localDaemonSetRemoteAgentSettings(call: PluginCall) {
+        val parsed = runCatching { LocalRemoteAgentSettings.fromJson(call.data) }
+            .getOrElse { return call.reject(it.message ?: "Invalid Remote Agent settings") }
+        Thread {
+            runCatching {
+                val saved = LocalRemoteAgentSettings.fromFilesDir(context.filesDir).write(parsed)
+                JSObject(saved.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to save Remote Agent settings") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbStatus(call: PluginCall) {
+        val refresh = call.getBoolean("refresh") ?: false
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).getStatus(refresh)
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to read Wireless ADB status") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbStartPairing(call: PluginCall) {
+        if (getPermissionState("notifications") != PermissionState.GRANTED) {
+            requestPermissionForAlias("notifications", call, "handleWirelessAdbNotificationPermission")
+            return
+        }
+        startWirelessAdbPairing(call)
+    }
+
+    @PermissionCallback
+    private fun handleWirelessAdbNotificationPermission(call: PluginCall) {
+        startWirelessAdbPairing(call)
+    }
+
+    private fun startWirelessAdbPairing(call: PluginCall) {
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).startPairingDiscovery()
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to start Wireless ADB pairing") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbStopPairing(call: PluginCall) {
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).stopPairingDiscovery()
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to stop Wireless ADB pairing") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbPair(call: PluginCall) {
+        val port = call.getInt("port") ?: return call.reject("Missing pairing port")
+        val code = call.getString("code")?.takeIf { it.isNotBlank() } ?: return call.reject("Missing pairing code")
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).pair(port, code)
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to pair Wireless ADB") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbConnect(call: PluginCall) {
+        val port = call.getInt("port")
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).connect(port)
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to connect Wireless ADB") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbSetKeepAlive(call: PluginCall) {
+        val enabled = call.getBoolean("enabled") ?: return call.reject("Missing enabled flag")
+        Thread {
+            runCatching {
+                val state = WirelessAdbController.get(context.applicationContext).setKeepAlive(enabled)
+                JSObject(state.toJson().toString())
+            }.fold(call::resolve) { call.reject(it.message ?: "Failed to update Wireless ADB keep-alive") }
+        }.start()
+    }
+
+    @PluginMethod
+    fun wirelessAdbOpenDeveloperSettings(call: PluginCall) {
+        val currentActivity = activity ?: return call.reject("Activity unavailable")
+        runCatching {
+            try {
+                currentActivity.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                currentActivity.startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }.fold({ call.resolve() }, { call.reject(it.message ?: "Failed to open Developer Options") })
     }
 
     @PluginMethod
@@ -373,6 +501,8 @@ class DeskFleetBridge : Plugin() {
     }
 
     override fun handleOnDestroy() {
+        stopWirelessAdbListener?.invoke()
+        stopWirelessAdbListener = null
         Handler(Looper.getMainLooper()).post { speechInput?.dispose() }
         nativeFiles?.dispose()
         stopSession()

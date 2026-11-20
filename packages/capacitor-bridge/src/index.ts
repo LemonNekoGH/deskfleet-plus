@@ -17,8 +17,17 @@ import {
 import type { OutlineAudioApi, OutlineAudioStatus } from "@deskfleet/client/outline-audio"
 import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
-import { attachAndroidLocalEnrollment as localDaemonEnrollment, type LocalDaemonBridgePlugin } from "./local-daemon.ts"
+import {
+  attachAndroidLocalEnrollment as localDaemonEnrollment,
+  createAndroidRemoteAgentSettings as androidRemoteAgentSettings,
+  type LocalDaemonBridgePlugin,
+  type RemoteAgentSettingsBridgePlugin,
+} from "./local-daemon.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
+import {
+  createCapacitorWirelessAdbApi as wirelessAdbApi,
+  type WirelessAdbBridgePlugin,
+} from "./wireless-adb.ts"
 export {
   ANDROID_TASK_NOTIFICATION_CHANNEL_ID,
   createCapacitorPushNotifications,
@@ -29,7 +38,7 @@ export {
   type PushNotificationTarget,
 } from "./push-notifications.ts"
 
-export type { LocalDaemonBridgePlugin }
+export type { LocalDaemonBridgePlugin, RemoteAgentSettingsBridgePlugin, WirelessAdbBridgePlugin }
 
 export interface TelemetryBridgePlugin {
   setTelemetryConsent(options: { enabled: boolean }): Promise<{ configured: boolean }>
@@ -40,7 +49,13 @@ export interface TelemetryBridgePlugin {
   }): Promise<{ configured: boolean }>
 }
 
-export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, FilesBridgePlugin, TelemetryBridgePlugin, LocalDaemonBridgePlugin {
+export interface DeskFleetBridgeCapacitorPlugin
+  extends SpeechBridgePlugin,
+    FilesBridgePlugin,
+    TelemetryBridgePlugin,
+    LocalDaemonBridgePlugin,
+    RemoteAgentSettingsBridgePlugin,
+    WirelessAdbBridgePlugin {
   authenticate(options: { url: string; callbackScheme: string }): Promise<{ url: string }>
   getInstallSource?(): Promise<{ installerPackageName: string | null }>
   /** Android's metered status for the active network. */
@@ -74,6 +89,10 @@ export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, File
     eventName: "localDaemonLog",
     listenerFunc: Parameters<NonNullable<LocalDaemonBridgePlugin["addListener"]>>[1],
   ): Promise<PluginListenerHandle>
+  addListener(
+    eventName: "wirelessAdbState",
+    listenerFunc: Parameters<WirelessAdbBridgePlugin["addListener"]>[1],
+  ): Promise<PluginListenerHandle>
 }
 
 export type ViewerBridgePlugin = Pick<
@@ -93,6 +112,18 @@ export function attachAndroidLocalEnrollment(
   plugin: LocalDaemonBridgePlugin = DeskFleetBridge,
 ): void {
   localDaemonEnrollment(central, plugin)
+}
+
+export function createAndroidRemoteAgentSettings(
+  plugin: RemoteAgentSettingsBridgePlugin = DeskFleetBridge,
+) {
+  return androidRemoteAgentSettings(plugin)
+}
+
+export function createCapacitorWirelessAdbApi(
+  plugin: WirelessAdbBridgePlugin = DeskFleetBridge,
+) {
+  return wirelessAdbApi(plugin)
 }
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {

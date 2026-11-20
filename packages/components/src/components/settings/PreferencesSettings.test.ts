@@ -80,3 +80,60 @@ test("shows telemetry consent switch only when site telemetry is enabled and syn
   expect(userTelemetryConsent.value).toBe(true)
   expect(updateTelemetryConsent).toHaveBeenCalledWith(expect.objectContaining({ consented: true }))
 })
+
+test("hides Remote Agents and Wireless ADB on pure Web hosts and shows them when Android local host exposes them", async () => {
+  configureClient({ ...host, platform: "web", localRemoteAgentSettings: undefined, wirelessAdb: undefined })
+  wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
+  await flushPromises()
+  expect(wrapper.find("#remote-agents-heading").exists()).toBe(false)
+  expect(wrapper.find("#wireless-adb-heading").exists()).toBe(false)
+  wrapper.unmount()
+
+  const getRemoteAgentSettings = vi.fn(async () => ({ allowRead: true, allowOperate: false, allowSessions: false, allowWorkspaces: false }))
+  const setRemoteAgentSettings = vi.fn(async (settings: { allowRead: boolean; allowOperate: boolean; allowSessions?: boolean; allowWorkspaces?: boolean }) => settings)
+  configureClient({
+    ...host,
+    platform: "web",
+    mobile: true,
+    localRemoteAgentSettings: true,
+    updates: stubUpdates,
+    wirelessAdb: {
+      status: vi.fn(async () => ({
+        state: "connected" as const,
+        endpoint: "127.0.0.1:5555",
+        tcpip5555Active: true,
+        keepAliveTcpip5555: true,
+        pairingDiscoveryActive: false,
+      })),
+      startPairing: vi.fn(),
+      stopPairing: vi.fn(),
+      pair: vi.fn(),
+      connect: vi.fn(),
+      setKeepAlive: vi.fn(),
+      openDeveloperSettings: vi.fn(),
+      onStateChanged: () => () => {},
+    },
+    settings: {
+      ...host.settings,
+      getAutoDownloadUpdates: vi.fn(async () => ({ enabled: true, pauseOnMetered: true, installSource: "google_play" as const })),
+      getRemoteAgentSettings,
+      setRemoteAgentSettings,
+    },
+  })
+  wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
+  await flushPromises()
+  expect(wrapper.find("#wireless-adb-heading").exists()).toBe(true)
+  expect(wrapper.find("#remote-agents-heading").exists()).toBe(true)
+  expect(wrapper.find("#updates-heading").exists()).toBe(true)
+  expect(getRemoteAgentSettings).toHaveBeenCalledOnce()
+
+  const remoteToggle = wrapper.get('[aria-labelledby="remote-agents-allowOperate-label"]')
+  await remoteToggle.trigger("click")
+  await flushPromises()
+  expect(setRemoteAgentSettings).toHaveBeenCalledWith({
+    allowRead: true,
+    allowOperate: true,
+    allowSessions: false,
+    allowWorkspaces: false,
+  })
+})

@@ -597,6 +597,7 @@
     },
     "notificationTaskCompleted": "タスク完了", "notificationTaskCompletedDescription": "エージェントがタスクを完了したときに通知します。",
     "notificationTaskNeedsInput": "入力が必要なタスク", "notificationTaskNeedsInputDescription": "エージェントが質問や承認を待っているときに通知します。",
+    "remoteAgentsTitle": "リモート Agent",
     "remoteAgents": {
       "allowRead": "他のマシンの Agent にこのコンピューターの読み取りを許可",
       "allowReadDescription": "同じチームの Agent が、このコンピューターのワークスペース、Agent セッション、会話履歴を読み取り、MCP ツールを確認できます。",
@@ -606,6 +607,31 @@
       "allowSessionsDescription": "同じチームの Agent が、このコンピューターで新しい Agent セッションを作成し、既存のセッションにプロンプトを送信できます。",
       "allowWorkspaces": "他のマシンの Agent にこのコンピューターでのワークスペース作成を許可",
       "allowWorkspacesDescription": "同じチームの Agent が、このコンピューター上の既存ディレクトリを新しいワークスペースとして登録できます。"
+    },
+    "wirelessAdb": {
+      "title": "ワイヤレス ADB",
+      "statusLabel": "接続状態",
+      "statusDescription": "この Android デバイスでリモートデスクトップの画面共有と入力操作を行うために必要です。",
+      "phase": {
+        "unprovisioned": "Linux コンテナーはまだ初期化されていません",
+        "disconnected": "未接続",
+        "pairing": "ペアリング中…",
+        "connecting": "接続中…",
+        "connected": "接続済み",
+        "error": "接続エラー"
+      },
+      "startPairing": "ペアリング開始",
+      "stopPairing": "ペアリング停止",
+      "openDeveloperOptions": "開発者向けオプション",
+      "reconnect": "再接続",
+      "manualPairToggle": "手動ペアリング",
+      "keepAliveLabel": "TCP/IP ポート 5555 で接続を維持",
+      "keepAliveDescription": "接続後に adb tcpip 5555 を実行し、端末を再起動するまで Wi-Fi 切り替えやモバイル回線でも ADB を維持します。",
+      "pairingPortLabel": "ペアリングポート",
+      "pairingCodeLabel": "ペアリングコード",
+      "pairAction": "ペアリング",
+      "pairingHint": "「開発者向けオプション > ワイヤレスデバッグ > ペアリングコードによるデバイスのペアリング」を開きます。ローカルのペアリングサービスを検出すると、通知からも入力できます。",
+      "invalidPairInput": "有効なポート番号（1〜65535）と数字のペアリングコードを入力してください。"
     },
     "thisComputer": "このコンピューター", "launchAtStartup": "ログイン時に起動",
     "launchAtStartupDescription": "ログイン時に DeskFleet を自動で起動します。", "launchAtStartupUnavailable": "Linux、macOS、Windows にインストールしたアプリで利用できます。",

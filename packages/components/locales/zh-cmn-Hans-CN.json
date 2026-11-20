@@ -717,6 +717,7 @@
     "notificationTaskCompletedDescription": "智能体完成任务时通知我。",
     "notificationTaskNeedsInput": "任务需要回应",
     "notificationTaskNeedsInputDescription": "智能体因等待问题回答或操作批准而暂停时通知我。",
+    "remoteAgentsTitle": "远程 Agent",
     "remoteAgents": {
       "allowRead": "允许其它机器上的 Agent 读取本机",
       "allowReadDescription": "同一团队中的 Agent 可以查看本机的工作区、Agent 会话和对话历史，以及发现 MCP 工具。",
@@ -726,6 +727,31 @@
       "allowSessionsDescription": "同一团队中的 Agent 可以在本机创建新的 Agent 会话，并向现有会话发送提示词。",
       "allowWorkspaces": "允许其它机器上的 Agent 在本机创建工作区",
       "allowWorkspacesDescription": "同一团队中的 Agent 可以将本机上的现有目录注册为新的工作区。"
+    },
+    "wirelessAdb": {
+      "title": "无线 ADB",
+      "statusLabel": "连接状态",
+      "statusDescription": "用于此 Android 设备的远程桌面画面采集与键鼠控制。",
+      "phase": {
+        "unprovisioned": "Linux 容器尚未初始化",
+        "disconnected": "未连接",
+        "pairing": "正在配对…",
+        "connecting": "正在连接…",
+        "connected": "已连接",
+        "error": "连接失败"
+      },
+      "startPairing": "开始配对",
+      "stopPairing": "停止配对",
+      "openDeveloperOptions": "开发者选项",
+      "reconnect": "重新连接",
+      "manualPairToggle": "手动配对",
+      "keepAliveLabel": "使用 TCP/IP 5555 端口保活",
+      "keepAliveDescription": "连接后执行 adb tcpip 5555，使 ADB 在 Wi-Fi 切换和移动网络下持续可用，直到设备重启。",
+      "pairingPortLabel": "配对端口",
+      "pairingCodeLabel": "配对码",
+      "pairAction": "配对",
+      "pairingHint": "打开「开发者选项 > 无线调试 > 使用配对码配对设备」。检测到本机配对服务时，DeskFleet 也会通过通知直接提示输入配对码。",
+      "invalidPairInput": "请输入有效的端口（1–65535）和数字配对码。"
     },
     "thisComputer": "本机",
     "launchAtStartup": "开机自启",

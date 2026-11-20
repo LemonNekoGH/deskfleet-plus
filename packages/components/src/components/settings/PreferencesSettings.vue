@@ -5,6 +5,7 @@ import { usePlatformClient } from "../../composables/usePlatformClient.ts"
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import AutoDownloadUpdatesSettings from "./AutoDownloadUpdatesSettings.vue"
+import AndroidWirelessAdbSettings from "./AndroidWirelessAdbSettings.vue"
 import KeepAwakeSettings from "./KeepAwakeSettings.vue"
 import LaunchAtStartupSettings from "./LaunchAtStartupSettings.vue"
 import LocalAgentSettings from "./LocalAgentSettings.vue"
@@ -77,10 +78,21 @@ if (client.platform === "web" && client.updates) {
       <LocalAgentSettings />
     </div>
   </section>
-  <section v-else-if="showWebUpdatesSection" aria-labelledby="updates-heading">
-    <h2 id="updates-heading" class="ui-section-title mb-2">{{ t("updatesSettings.title") }}</h2>
-    <div class="ui-card">
-      <AutoDownloadUpdatesSettings />
-    </div>
-  </section>
+  <template v-else>
+    <section v-if="client.wirelessAdb" class="mb-6" aria-labelledby="wireless-adb-heading">
+      <AndroidWirelessAdbSettings />
+    </section>
+    <section v-if="client.localRemoteAgentSettings" class="mb-6" aria-labelledby="remote-agents-heading">
+      <h2 id="remote-agents-heading" class="ui-section-title mb-2">{{ t("settings.remoteAgentsTitle") }}</h2>
+      <div class="ui-card">
+        <RemoteAgentSettings />
+      </div>
+    </section>
+    <section v-if="showWebUpdatesSection" aria-labelledby="updates-heading">
+      <h2 id="updates-heading" class="ui-section-title mb-2">{{ t("updatesSettings.title") }}</h2>
+      <div class="ui-card">
+        <AutoDownloadUpdatesSettings />
+      </div>
+    </section>
+  </template>
 </template>

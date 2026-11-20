@@ -22,12 +22,16 @@ import type { NetworkDiagnosticsApi } from "./network-diagnostics.ts"
 import type { OutlineAudioApi } from "./outline-audio.ts"
 import type { ApplicationApi } from "./application.ts"
 import type { SpeechApi } from "./speech.ts"
+import type { WirelessAdbApi } from "./wireless-adb.ts"
 
 /** The host platform adapter configured for the shared application. */
 export interface DeskfleetDesktopApi {
   platform: "darwin" | "linux" | "win32" | "web"
   /** True when running inside the native mobile client (Android / iOS). */
   mobile?: boolean
+  /** True when the host manages local daemon Remote Agent permissions (Android embedded daemon). */
+  localRemoteAgentSettings?: boolean
+  wirelessAdb?: WirelessAdbApi
   central?: CentralApi
   /** Only the Web host exposes site administration. */
   siteAdministration?: SiteAdministrationApi

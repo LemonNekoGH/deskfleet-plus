@@ -1,6 +1,12 @@
 import { expect, test } from "vitest"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
-import { attachAndroidLocalEnrollment, type LocalDaemonBridgePlugin, type PreparedEnrollment } from "./local-daemon.ts"
+import {
+  attachAndroidLocalEnrollment,
+  createAndroidRemoteAgentSettings,
+  type LocalDaemonBridgePlugin,
+  type PreparedEnrollment,
+  type RemoteAgentSettingsBridgePlugin,
+} from "./local-daemon.ts"
 
 function createFakeCentral(initialServerUrl = "https://fleet.example"): {
   central: CentralApi
@@ -228,4 +234,41 @@ test("onLocalEnrollmentOutput streams native logs and milestones without leaking
   expect(failedChunks.join("")).toContain("Extracting rootfs...")
   expect(failedChunks.join("")).toContain("rootfs download failed")
   expect(removed).toBe(2)
+})
+
+test("createAndroidRemoteAgentSettings reads, normalizes, and writes Remote Agent permissions", async () => {
+  let stored = {
+    allowRead: true,
+    allowOperate: false,
+    allowSessions: true,
+    allowWorkspaces: false,
+  }
+  const calls: unknown[] = []
+  const plugin: RemoteAgentSettingsBridgePlugin = {
+    async localDaemonGetRemoteAgentSettings() {
+      return stored
+    },
+    async localDaemonSetRemoteAgentSettings(settings) {
+      calls.push(settings)
+      stored = {
+        allowRead: settings.allowRead,
+        allowOperate: settings.allowOperate,
+        allowSessions: Boolean(settings.allowSessions),
+        allowWorkspaces: Boolean(settings.allowWorkspaces),
+      }
+      return stored
+    },
+  }
+
+  const settingsApi = createAndroidRemoteAgentSettings(plugin)
+  expect(await settingsApi.getRemoteAgentSettings()).toEqual(stored)
+  expect(await settingsApi.setRemoteAgentSettings({ allowRead: true, allowOperate: true })).toEqual({
+    allowRead: true,
+    allowOperate: true,
+    allowSessions: false,
+    allowWorkspaces: false,
+  })
+  expect(calls).toEqual([
+    { allowRead: true, allowOperate: true, allowSessions: false, allowWorkspaces: false },
+  ])
 })

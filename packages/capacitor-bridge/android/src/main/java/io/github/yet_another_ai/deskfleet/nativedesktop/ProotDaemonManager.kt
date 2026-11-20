@@ -598,6 +598,18 @@ internal class ProotDaemonManager(
         const val DEBIAN_ROOTFS_FALLBACK_URL = "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/dist-arm64v8/trixie/oci/blobs/rootfs.tar.gz"
         const val SCRCPY_SERVER_URL = "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1"
 
+        internal fun hasSavedRegistrations(filesDir: File): Boolean {
+            val baseDir = File(filesDir, "linux")
+            val daemonBin = File(baseDir, "rootfs/opt/deskfleet/deskfleet-daemon")
+            val registrationsFile = File(baseDir, "data/machine-registrations.json")
+            if (!daemonBin.exists() || !registrationsFile.isFile) {
+                return false
+            }
+            return runCatching {
+                JSONArray(registrationsFile.readText(Charsets.UTF_8)).length() > 0
+            }.getOrDefault(false)
+        }
+
         internal fun prootBaseEnv(nativeLibraryDir: File, baseDir: File): Map<String, String> = mapOf(
             "LD_LIBRARY_PATH" to nativeLibraryDir.absolutePath,
             "PROOT_LOADER" to File(nativeLibraryDir, "libproot_loader.so").absolutePath,

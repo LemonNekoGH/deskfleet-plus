@@ -717,6 +717,7 @@
     "notificationTaskCompletedDescription": "Notify me when an agent finishes a task.",
     "notificationTaskNeedsInput": "Task needs input",
     "notificationTaskNeedsInputDescription": "Notify me when an agent pauses for a question or approval.",
+    "remoteAgentsTitle": "Remote Agents",
     "remoteAgents": {
       "allowRead": "Allow Agents on other machines to read this computer",
       "allowReadDescription": "Agents in the same team can view this computer's Workspaces, Agent sessions and conversation history, and discover its MCP tools.",
@@ -726,6 +727,31 @@
       "allowSessionsDescription": "Agents in the same team can create new Agent sessions on this computer and send prompts to existing sessions.",
       "allowWorkspaces": "Allow Agents on other machines to create workspaces on this computer",
       "allowWorkspacesDescription": "Agents in the same team can register existing directories on this computer as new Workspaces."
+    },
+    "wirelessAdb": {
+      "title": "Wireless ADB",
+      "statusLabel": "Connection status",
+      "statusDescription": "Required for remote desktop capture and input on this Android device.",
+      "phase": {
+        "unprovisioned": "Linux container not set up yet",
+        "disconnected": "Disconnected",
+        "pairing": "Pairing…",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "error": "Connection failed"
+      },
+      "startPairing": "Start pairing",
+      "stopPairing": "Stop pairing",
+      "openDeveloperOptions": "Developer options",
+      "reconnect": "Reconnect",
+      "manualPairToggle": "Manual pair",
+      "keepAliveLabel": "Keep alive on TCP/IP port 5555",
+      "keepAliveDescription": "Run adb tcpip 5555 after connecting so ADB stays available across Wi-Fi switches and cellular networks until reboot.",
+      "pairingPortLabel": "Pairing port",
+      "pairingCodeLabel": "Pairing code",
+      "pairAction": "Pair",
+      "pairingHint": "Open Developer options > Wireless debugging > Pair device with pairing code. DeskFleet can also prompt you in a notification when it detects a local pairing service.",
+      "invalidPairInput": "Enter a valid port (1–65535) and numeric pairing code."
     },
     "thisComputer": "This computer",
     "launchAtStartup": "Launch at startup",

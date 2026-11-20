@@ -39,5 +39,9 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Hosts the embedded Linux container and DeskFleet daemon process." />
         </service>
+
+        <receiver
+            android:name=".WirelessAdbPairingReceiver"
+            android:exported="false" />
     </application>
 </manifest>

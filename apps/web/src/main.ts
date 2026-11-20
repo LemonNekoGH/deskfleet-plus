@@ -3,6 +3,7 @@ import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core"
 import {
   DeskFleetBridge,
   attachAndroidLocalEnrollment,
+  createAndroidRemoteAgentSettings,
   createCapacitorFilesApi,
   createCapacitorNativeDesktopApi,
   createCapacitorNetworkDiagnosticsApi,
@@ -10,6 +11,7 @@ import {
   createCapacitorPushNotifications,
   createCapacitorSpeechApi,
   createCapacitorTelemetrySink,
+  createCapacitorWirelessAdbApi,
 } from "@deskfleet/capacitor-bridge"
 import { createAndroidUpdates } from "@deskfleet/capacitor-bridge/app-updates"
 import { setNativeTelemetrySink } from "@deskfleet/client/google-tag"
@@ -71,10 +73,13 @@ if (Capacitor.getPlatform() === "android") {
     attachAndroidLocalEnrollment(adapter.central)
   }
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
+  adapter.localRemoteAgentSettings = true
+  adapter.wirelessAdb = createCapacitorWirelessAdbApi()
   const androidUpdates = await createAndroidUpdates({ getAppInfo: () => CapApp.getInfo() })
   adapter.updates = androidUpdates.updates
   adapter.settings = {
     ...adapter.settings,
+    ...createAndroidRemoteAgentSettings(),
     getAutoDownloadUpdates: androidUpdates.getAutoDownload,
     setAutoDownloadUpdates: androidUpdates.setAutoDownload,
     setPauseUpdatesOnMetered: androidUpdates.setPauseOnMetered,

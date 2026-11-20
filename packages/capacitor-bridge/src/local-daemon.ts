@@ -1,5 +1,6 @@
 import type { PluginListenerHandle } from "@capacitor/core"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
+import type { RemoteAgentSettings, SettingsApi } from "@deskfleet/client/settings"
 
 export type PreparedEnrollment = LocalEnrollment & { identityToken: string }
 
@@ -17,6 +18,34 @@ export interface LocalDaemonBridgePlugin {
     eventName: "localDaemonLog",
     listenerFunc: (data: { chunk: string }) => void,
   ): Promise<PluginListenerHandle>
+}
+
+export interface RemoteAgentSettingsBridgePlugin {
+  localDaemonGetRemoteAgentSettings(): Promise<RemoteAgentSettings>
+  localDaemonSetRemoteAgentSettings(settings: RemoteAgentSettings): Promise<RemoteAgentSettings>
+}
+
+function normalizeRemoteAgentSettings(value: RemoteAgentSettings): RemoteAgentSettings {
+  return {
+    allowRead: Boolean(value.allowRead),
+    allowOperate: Boolean(value.allowOperate),
+    allowSessions: Boolean(value.allowSessions),
+    allowWorkspaces: Boolean(value.allowWorkspaces),
+  }
+}
+
+export function createAndroidRemoteAgentSettings(
+  plugin: RemoteAgentSettingsBridgePlugin,
+): Pick<SettingsApi, "getRemoteAgentSettings" | "setRemoteAgentSettings"> {
+  return {
+    async getRemoteAgentSettings(): Promise<RemoteAgentSettings> {
+      return normalizeRemoteAgentSettings(await plugin.localDaemonGetRemoteAgentSettings())
+    },
+    async setRemoteAgentSettings(settings: RemoteAgentSettings): Promise<RemoteAgentSettings> {
+      const normalized = normalizeRemoteAgentSettings(settings)
+      return normalizeRemoteAgentSettings(await plugin.localDaemonSetRemoteAgentSettings(normalized))
+    },
+  }
 }
 
 /**
