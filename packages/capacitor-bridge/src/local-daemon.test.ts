@@ -152,3 +152,80 @@ test("enrollLocal falls back to daemon machineName on blank input and propagates
     identityToken: "tok",
   })
 })
+
+test("onLocalEnrollmentOutput streams native logs and milestones without leaking secrets", async () => {
+  const { central } = createFakeCentral()
+  let emitLog: ((data: { chunk: string }) => void) | undefined
+  let removed = 0
+  const plugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() { return { machineName: "Pixel 9 Pro", registrations: [] } },
+    async localDaemonPrepareEnrollment() {
+      emitLog?.({ chunk: "Downloading Debian rootfs...\n" })
+      emitLog?.({ chunk: "Setting up adb (34.0.5)...\n" })
+      return { ...createEnrollment(), identityToken: "secret-id-token-never-log" }
+    },
+    async localDaemonEnroll() {
+      emitLog?.({ chunk: "Imported machine credentials.\n" })
+      return createEnrollment({
+        configured: true,
+        connected: true,
+        serverUrl: "https://fleet.example",
+        teamId: "team-1",
+        machineId: "central-machine-42",
+      })
+    },
+    async addListener(eventName, listenerFunc) {
+      expect(eventName).toBe("localDaemonLog")
+      emitLog = listenerFunc
+      return {
+        async remove() {
+          removed += 1
+          emitLog = undefined
+        },
+      }
+    },
+  }
+
+  attachAndroidLocalEnrollment(central, plugin)
+  const chunks: string[] = []
+  const unsubscribe = central.onLocalEnrollmentOutput!(chunk => chunks.push(chunk))
+  await central.enrollLocal!("team-1", "Phone")
+  unsubscribe()
+  const combined = chunks.join("")
+  expect(combined).toContain("Checking local daemon status...")
+  expect(combined).toContain("Downloading Debian rootfs...")
+  expect(combined).toContain("Setting up adb (34.0.5)...")
+  expect(combined).toContain('Registering "Phone" with https://fleet.example')
+  expect(combined).toContain("Imported machine credentials.")
+  expect(combined).toContain("Connected to team.")
+  expect(combined).not.toContain("secret-id-token-never-log")
+  expect(combined).not.toContain("secret-machine-token")
+  expect(removed).toBe(1)
+
+  const failingPlugin: LocalDaemonBridgePlugin = {
+    async localDaemonStatus() { return { machineName: "Pixel 9 Pro", registrations: [] } },
+    async localDaemonPrepareEnrollment() {
+      emitLog?.({ chunk: "Extracting rootfs...\n" })
+      throw new Error("rootfs download failed")
+    },
+    async localDaemonEnroll() { throw new Error("unexpected") },
+    async addListener(_eventName, listenerFunc) {
+      emitLog = listenerFunc
+      return {
+        async remove() {
+          removed += 1
+          emitLog = undefined
+        },
+      }
+    },
+  }
+  const { central: failingCentral } = createFakeCentral()
+  attachAndroidLocalEnrollment(failingCentral, failingPlugin)
+  const failedChunks: string[] = []
+  const stop = failingCentral.onLocalEnrollmentOutput!(chunk => failedChunks.push(chunk))
+  await expect(failingCentral.enrollLocal!("team-1", "Phone")).rejects.toThrow(/rootfs download failed/)
+  stop()
+  expect(failedChunks.join("")).toContain("Extracting rootfs...")
+  expect(failedChunks.join("")).toContain("rootfs download failed")
+  expect(removed).toBe(2)
+})

@@ -70,6 +70,10 @@ export interface DeskFleetBridgeCapacitorPlugin extends SpeechBridgePlugin, File
     eventName: "outlineAudioStopped",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>
+  addListener(
+    eventName: "localDaemonLog",
+    listenerFunc: Parameters<NonNullable<LocalDaemonBridgePlugin["addListener"]>>[1],
+  ): Promise<PluginListenerHandle>
 }
 
 export type ViewerBridgePlugin = Pick<

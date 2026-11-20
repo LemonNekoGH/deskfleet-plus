@@ -1,5 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { afterEach, expect, test, vi } from "vitest"
+import { defineComponent } from "vue"
 import type { LocalEnrollment } from "@deskfleet/client/central"
 import { accountSessionKey, createAccountSession, type AccountSession } from "../../composables/useAccountSession.ts"
 import { i18n } from "../../i18n/index.ts"
@@ -7,16 +8,43 @@ import { fakeCentral, machineFixture } from "../../test/central.ts"
 import AddMachineDialog from "./AddMachineDialog.vue"
 import { parseDaemonStatus } from "./daemon-status.ts"
 
+const decoder = new TextDecoder()
+const writtenChunks: string[] = []
+let terminalResets = 0
+const TerminalSurfaceStub = defineComponent({
+  name: "TerminalSurface",
+  props: { tools: Boolean, convertEol: Boolean },
+  setup(_props, { expose }) {
+    expose({
+      write: (data: Uint8Array) => { writtenChunks.push(decoder.decode(data)) },
+      reset: () => { terminalResets += 1 },
+      focus: () => {},
+    })
+    return () => null
+  },
+})
+
 let view: VueWrapper | undefined
 let session: AccountSession | undefined
-afterEach(() => { view?.unmount(); view = undefined; session?.dispose(); session = undefined; i18n.global.locale.value = "en-US" })
+afterEach(() => {
+  view?.unmount(); view = undefined; session?.dispose(); session = undefined; i18n.global.locale.value = "en-US"
+  writtenChunks.length = 0; terminalResets = 0
+})
 const status = (value: Record<string, unknown> = {}) => JSON.stringify({ configured: false, connected: false, revoked: false, identity: { originId: "server-origin", machineId: "1" }, machineName: "ssh-box", serverUrl: "https://fleet.example", teamId: "team-1", identityToken: "host-secret", ...value }, null, 2)
 const local = (value: Partial<LocalEnrollment> = {}): LocalEnrollment => ({ configured: false, connected: false, revoked: false, identity: { originId: "o", machineId: "1" }, machineName: "This Mac", ...value })
-async function setup(enrollment?: LocalEnrollment) {
+async function setup(enrollment?: LocalEnrollment, configure?: (central: ReturnType<typeof fakeCentral>["central"]) => void) {
   const fake = fakeCentral({ enrollment, machines: enrollment?.machineId ? [machineFixture(enrollment.machineId, enrollment.teamId!, "This Mac")] : [] })
+  configure?.(fake.central)
   session = createAccountSession(fake.central)
   await flushPromises()
-  view = mount(AddMachineDialog, { global: { stubs: { teleport: { inheritAttrs: false, template: "<slot />" } }, plugins: [i18n], provide: { [accountSessionKey as symbol]: session } }, attachTo: document.body })
+  view = mount(AddMachineDialog, {
+    global: {
+      stubs: { teleport: { inheritAttrs: false, template: "<slot />" }, TerminalSurface: TerminalSurfaceStub },
+      plugins: [i18n],
+      provide: { [accountSessionKey as symbol]: session },
+    },
+    attachTo: document.body,
+  })
   await flushPromises()
   return fake
 }
@@ -119,4 +147,75 @@ test("both the desktop chooser and headless setup link to the localized Android 
   i18n.global.locale.value = "ja-JP"
   await flushPromises()
   expect(headlessLink.attributes("href")).toBe("https://www.deskfleet.org/ja/guide/android")
+})
+
+test("desktop local enrollment does not show a setup terminal", async () => {
+  let resolveEnroll!: () => void
+  const enrollment = local()
+  await setup(enrollment, central => {
+    central.enrollLocal = vi.fn(() => new Promise(resolve => {
+      resolveEnroll = () => resolve({ ...enrollment, configured: true, serverUrl: "https://fleet.example", teamId: "team-1", machineId: "local-1" })
+    }))
+  })
+  await view!.get('[data-add-machine="local"]').trigger("click")
+  await flushPromises()
+  expect(view!.find("[data-local-enrollment-terminal]").exists()).toBe(false)
+  await view!.get("form").trigger("submit")
+  await flushPromises()
+  expect(view!.find("[data-local-enrollment-terminal]").exists()).toBe(false)
+  resolveEnroll()
+  await flushPromises()
+})
+
+test("embedded local enrollment streams setup terminal output, unsubscribes on finish, and preserves logs across failed retries", async () => {
+  let listener: ((chunk: string) => void) | undefined
+  let unsubscribed = 0
+  let attempt = 0
+  let resolveSecond!: () => void
+  const enrollment = local()
+
+  const fake = await setup(enrollment, central => {
+    central.onLocalEnrollmentOutput = cb => {
+      listener = cb
+      return () => {
+        unsubscribed += 1
+        listener = undefined
+      }
+    }
+    central.enrollLocal = vi.fn(async () => {
+      attempt += 1
+      if (attempt === 1) {
+        listener?.("Downloading Debian rootfs...\n")
+        throw new Error("Container download failed")
+      }
+      listener?.("Extracting rootfs...\n")
+      await new Promise<void>(resolve => { resolveSecond = resolve })
+      listener?.("Daemon ready.\n")
+      return { ...enrollment, configured: true, serverUrl: "https://fleet.example", teamId: "team-1", machineId: "local-1" }
+    })
+  })
+
+  await view!.get('[data-add-machine="local"]').trigger("click")
+  await flushPromises()
+  expect(view!.find("[data-local-enrollment-terminal]").exists()).toBe(false)
+
+  await view!.get("form").trigger("submit")
+  await flushPromises()
+  expect(view!.get('[role="alert"]').text()).toBe("Container download failed")
+  expect(view!.find("[data-local-enrollment-terminal]").exists()).toBe(true)
+  expect(writtenChunks.join("")).toContain("Downloading Debian rootfs...\n")
+  expect(unsubscribed).toBe(1)
+
+  await view!.get("form").trigger("submit")
+  await flushPromises()
+  expect(terminalResets).toBeGreaterThanOrEqual(1)
+  expect(view!.find("[data-local-enrollment-terminal]").exists()).toBe(true)
+  expect(writtenChunks.join("")).toContain("Extracting rootfs...\n")
+
+  resolveSecond()
+  await flushPromises()
+  expect(fake.central.enrollLocal).toHaveBeenCalledTimes(2)
+  expect(unsubscribed).toBe(2)
+  expect(writtenChunks.join("")).toContain("Daemon ready.\n")
+  await vi.waitFor(() => expect(view!.emitted("close")).toEqual([[]]))
 })

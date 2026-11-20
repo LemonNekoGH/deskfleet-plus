@@ -4,9 +4,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterInputStream
 import java.io.InputStream
+import java.io.InputStreamReader
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.zip.GZIPInputStream
 
 internal data class ShellResult(
@@ -23,10 +27,23 @@ internal data class ProotInvocation(
 
 internal interface ProotRunner {
     fun run(invocation: ProotInvocation, stdin: String? = null): ShellResult
+
+    fun runStreaming(
+        invocation: ProotInvocation,
+        stdin: String? = null,
+        onOutput: (String) -> Unit,
+    ): ShellResult = run(invocation, stdin)
 }
 
 internal interface AssetDownloader {
     fun download(url: String, destination: File, gunzip: Boolean = false)
+
+    fun download(
+        url: String,
+        destination: File,
+        gunzip: Boolean = false,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)?,
+    ) = download(url, destination, gunzip)
 }
 
 internal fun interface EmbeddedAssetOpener {
@@ -34,7 +51,20 @@ internal fun interface EmbeddedAssetOpener {
 }
 
 internal object ProcessProotRunner : ProotRunner {
-    override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+    override fun run(invocation: ProotInvocation, stdin: String?): ShellResult =
+        execute(invocation, stdin, onOutput = null)
+
+    override fun runStreaming(
+        invocation: ProotInvocation,
+        stdin: String?,
+        onOutput: (String) -> Unit,
+    ): ShellResult = execute(invocation, stdin, onOutput = onOutput)
+
+    private fun execute(
+        invocation: ProotInvocation,
+        stdin: String?,
+        onOutput: ((String) -> Unit)?,
+    ): ShellResult {
         val builder = ProcessBuilder(listOf(invocation.executable) + invocation.args)
         builder.environment().putAll(invocation.env)
         val process = builder.start()
@@ -45,25 +75,76 @@ internal object ProcessProotRunner : ProotRunner {
         } else {
             process.outputStream.close()
         }
-        var stdout = ""
-        var stderr = ""
-        val outThread = Thread {
-            stdout = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
+        val stdoutBuilder = StringBuilder()
+        val stderrBuilder = StringBuilder()
+        val outputLock = Any()
+        fun drain(stream: InputStream, sink: StringBuilder) {
+            InputStreamReader(stream, Charsets.UTF_8).use { reader ->
+                val buffer = CharArray(1024)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    val chunk = String(buffer, 0, count)
+                    sink.append(chunk)
+                    if (onOutput != null) {
+                        synchronized(outputLock) {
+                            onOutput(chunk)
+                        }
+                    }
+                }
+            }
         }
-        val errThread = Thread {
-            stderr = process.errorStream.bufferedReader(Charsets.UTF_8).readText()
-        }
+        val outThread = Thread { drain(process.inputStream, stdoutBuilder) }
+        val errThread = Thread { drain(process.errorStream, stderrBuilder) }
         outThread.start()
         errThread.start()
         val exitCode = process.waitFor()
         outThread.join()
         errThread.join()
-        return ShellResult(exitCode, stdout, stderr)
+        return ShellResult(exitCode, stdoutBuilder.toString(), stderrBuilder.toString())
+    }
+}
+
+private class CountingInputStream(
+    delegate: InputStream,
+    private val onBytesRead: (Long) -> Unit,
+) : FilterInputStream(delegate) {
+    private var totalRead = 0L
+
+    override fun read(): Int {
+        val value = super.read()
+        if (value != -1) {
+            totalRead += 1
+            onBytesRead(totalRead)
+        }
+        return value
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        val count = super.read(b, off, len)
+        if (count > 0) {
+            totalRead += count
+            onBytesRead(totalRead)
+        }
+        return count
     }
 }
 
 internal object HttpAssetDownloader : AssetDownloader {
+    private const val PROGRESS_INTERVAL_MS = 250L
+    private const val PROGRESS_BYTES_STEP = 256L * 1024L
+
     override fun download(url: String, destination: File, gunzip: Boolean) {
+        download(url, destination, gunzip, onProgress = null)
+    }
+
+    override fun download(
+        url: String,
+        destination: File,
+        gunzip: Boolean,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)?,
+    ) {
         destination.parentFile?.mkdirs()
         val part = File(destination.parentFile, "${destination.name}.part")
         var current = url
@@ -87,11 +168,32 @@ internal object HttpAssetDownloader : AssetDownloader {
                     if (code !in 200..299) {
                         throw IllegalStateException("Download failed ($code) for $current")
                     }
-                    val input: InputStream = if (gunzip) GZIPInputStream(conn.inputStream) else conn.inputStream
+                    val totalBytes = conn.contentLengthLong
+                    val progressLock = Any()
+                    var lastEmitMs = 0L
+                    var lastEmitBytes = -1L
+                    var finalBytes = 0L
+                    val counted = CountingInputStream(conn.inputStream) { bytesRead ->
+                        finalBytes = bytesRead
+                        if (onProgress != null) {
+                            val now = System.currentTimeMillis()
+                            if (lastEmitBytes < 0L || bytesRead - lastEmitBytes >= PROGRESS_BYTES_STEP || now - lastEmitMs >= PROGRESS_INTERVAL_MS) {
+                                synchronized(progressLock) {
+                                    lastEmitBytes = bytesRead
+                                    lastEmitMs = now
+                                    onProgress(bytesRead, totalBytes)
+                                }
+                            }
+                        }
+                    }
+                    val input: InputStream = if (gunzip) GZIPInputStream(counted) else counted
                     input.use { src ->
                         FileOutputStream(part).use { out ->
                             src.copyTo(out)
                         }
+                    }
+                    if (onProgress != null && (finalBytes != lastEmitBytes || finalBytes == 0L)) {
+                        onProgress(finalBytes, totalBytes)
                     }
                     if (!part.renameTo(destination)) {
                         part.copyTo(destination, overwrite = true)
@@ -122,6 +224,7 @@ internal class ProotDaemonManager(
     private val downloader: AssetDownloader = HttpAssetDownloader,
     private val sleepMillis: (Long) -> Unit = Thread::sleep,
     private val assetOpener: EmbeddedAssetOpener = EmbeddedAssetOpener { null },
+    private val onLog: (String) -> Unit = {},
 ) {
     private val baseDir = File(filesDir, "linux")
     private val rootfsDir = File(baseDir, "rootfs")
@@ -157,6 +260,7 @@ internal class ProotDaemonManager(
         startService: () -> Unit,
     ): String {
         ensureRunning(startService)
+        emitStep("Preparing machine identity for $serverUrl...")
         val result = runCheckedInProot(
             listOf(
                 "/opt/deskfleet/deskfleet-daemon",
@@ -167,14 +271,17 @@ internal class ProotDaemonManager(
                 teamId,
             ),
         )
+        emitSuccess("Machine identity prepared.")
         return extractJsonObject(result.stdout, "prepare-enrollment")
     }
 
     fun enroll(serverUrl: String, credentialsJson: String): String {
+        emitStep("Saving machine credentials into local daemon...")
         val result = runCheckedInProot(
             listOf("/opt/deskfleet/deskfleet-daemon", "enroll", "--server-url", serverUrl),
             stdin = credentialsJson,
         )
+        emitSuccess("Local daemon enrolled.")
         return extractJsonObject(result.stdout, "enroll")
     }
 
@@ -189,6 +296,7 @@ internal class ProotDaemonManager(
         val installedVersion = if (versionFile.isFile) versionFile.readText().trim() else ""
         if (shellBin.exists() && daemonBin.exists() && scrcpyJar.isFile && installedVersion == versionName) {
             prepareRootfsDirectories()
+            emitSuccess("Embedded Debian container already provisioned (v$versionName).")
             return
         }
 
@@ -198,12 +306,15 @@ internal class ProotDaemonManager(
                 downloadDebianRootfs(rootfsTar)
                 extractRootfsTar(rootfsTar, shellBin)
                 prepareRootfsDirectories()
+                emitInfo("Configured /etc/resolv.conf and /etc/hosts.")
+                emitStep("$ apt-get update && apt-get install ca-certificates git curl adb")
                 runCheckedInProot(
                     listOf(
                         "/bin/sh",
                         "-c",
                         "apt-get -o APT::Sandbox::User=root update && DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y --no-install-recommends ca-certificates git curl adb && rm -rf /var/lib/apt/lists/*",
                     ),
+                    streamOutput = true,
                 )
             } finally {
                 rootfsTar.delete()
@@ -217,6 +328,7 @@ internal class ProotDaemonManager(
             try {
                 val bundledDaemon = assetOpener.open(EMBEDDED_DAEMON_ASSET)
                 if (bundledDaemon != null) {
+                    emitStep("Extracting bundled DeskFleet daemon (v$versionName)...")
                     tmpArchive.parentFile?.mkdirs()
                     bundledDaemon.use { src ->
                         FileOutputStream(tmpArchive).use { out ->
@@ -226,12 +338,14 @@ internal class ProotDaemonManager(
                 } else {
                     downloadDaemonRelease(tmpArchive)
                 }
+                emitInfo("Unpacking /opt/deskfleet/deskfleet-daemon...")
                 runCheckedInProot(
                     listOf(
                         "/bin/sh",
                         "-c",
                         "rm -rf /opt/deskfleet/dsh && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz && chmod 0755 /opt/deskfleet/deskfleet-daemon",
                     ),
+                    streamOutput = true,
                 )
                 versionFile.writeText(versionName, Charsets.UTF_8)
             } finally {
@@ -242,6 +356,7 @@ internal class ProotDaemonManager(
         if (!scrcpyJar.isFile) {
             val bundledScrcpy = assetOpener.open(EMBEDDED_SCRCPY_ASSET)
             if (bundledScrcpy != null) {
+                emitStep("Staging bundled scrcpy-server.jar...")
                 scrcpyJar.parentFile?.mkdirs()
                 bundledScrcpy.use { src ->
                     FileOutputStream(scrcpyJar).use { out ->
@@ -249,16 +364,18 @@ internal class ProotDaemonManager(
                     }
                 }
             } else {
-                downloader.download(SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
+                downloadWithProgress("scrcpy-server.jar", SCRCPY_SERVER_URL, scrcpyJar, gunzip = false)
             }
             scrcpyJar.setReadable(true, false)
         }
+        emitSuccess("Embedded Debian container provisioned.")
     }
 
     private fun extractRootfsTar(rootfsTar: File, shellBin: File) {
+        emitStep("Extracting Debian rootfs...")
         rootfsDir.deleteRecursively()
         rootfsDir.mkdirs()
-        val prootExtract = runner.run(
+        val prootExtract = runner.runStreaming(
             ProotInvocation(
                 executable = File(nativeLibraryDir, "libproot.so").absolutePath,
                 args = listOf(
@@ -276,9 +393,11 @@ internal class ProotDaemonManager(
                 ),
                 env = prootBaseEnv(nativeLibraryDir, baseDir),
             ),
+            onOutput = onLog,
         )
         if (!shellBin.exists()) {
-            val directExtract = runner.run(
+            emitWarning("Proot tar did not finish cleanly; retrying extraction with /system/bin/tar...")
+            val directExtract = runner.runStreaming(
                 ProotInvocation(
                     executable = "/system/bin/tar",
                     args = listOf(
@@ -289,11 +408,13 @@ internal class ProotDaemonManager(
                     ),
                     env = emptyMap(),
                 ),
+                onOutput = onLog,
             )
             if (!shellBin.exists()) {
                 val detail = directExtract.stderr.trim()
                     .ifEmpty { prootExtract.stderr.trim() }
                     .ifEmpty { "exit code ${directExtract.exitCode}" }
+                emitError("Failed to extract Debian rootfs: $detail")
                 throw IllegalStateException("Failed to extract Debian rootfs: $detail")
             }
         }
@@ -301,23 +422,34 @@ internal class ProotDaemonManager(
 
     fun ensureRunning(startService: () -> Unit) {
         ensureProvisioned()
-        if (isDaemonReady()) return
+        if (isDaemonReady()) {
+            emitSuccess("Local deskfleet-daemon is already running.")
+            return
+        }
 
+        val logFile = File(baseDir, "daemon.log")
+        var logOffset = if (logFile.isFile) logFile.length() else 0L
+        emitStep("Starting local deskfleet-daemon service...")
         startService()
         repeat(60) {
-            if (isDaemonReady()) return
+            logOffset = drainDaemonLog(logFile, logOffset)
+            if (isDaemonReady()) {
+                drainDaemonLog(logFile, logOffset)
+                emitSuccess("Local deskfleet-daemon is ready.")
+                return
+            }
             sleepMillis(500)
         }
-        val logFile = File(baseDir, "daemon.log")
+        drainDaemonLog(logFile, logOffset)
         val tailLog = if (logFile.isFile) {
             logFile.readLines().takeLast(40).joinToString("\n").trim()
         } else {
             ""
         }
-        throw IllegalStateException(
-            if (tailLog.isNotEmpty()) "DeskFleet daemon did not become ready: $tailLog"
-            else "DeskFleet daemon did not become ready in time.",
-        )
+        val errorMessage = if (tailLog.isNotEmpty()) "DeskFleet daemon did not become ready: $tailLog"
+        else "DeskFleet daemon did not become ready in time."
+        emitError(errorMessage)
+        throw IllegalStateException(errorMessage)
     }
 
     private fun prepareRootfsDirectories() {
@@ -341,18 +473,82 @@ internal class ProotDaemonManager(
     }
 
     private fun downloadDebianRootfs(destination: File) {
-        val primary = runCatching { downloader.download(DEBIAN_ROOTFS_URL, destination, gunzip = true) }
+        val primary = runCatching {
+            downloadWithProgress("Debian rootfs", DEBIAN_ROOTFS_URL, destination, gunzip = true)
+        }
         if (primary.isSuccess) return
-        downloader.download(DEBIAN_ROOTFS_FALLBACK_URL, destination, gunzip = true)
+        emitWarning("Primary Debian rootfs mirror unavailable; trying fallback...")
+        downloadWithProgress("Debian rootfs (fallback)", DEBIAN_ROOTFS_FALLBACK_URL, destination, gunzip = true)
     }
 
     private fun downloadDaemonRelease(destination: File) {
         val versionedUrl = "https://github.com/yet-another-ai/deskfleet/releases/download/v$versionName/deskfleet-linux-arm64.tar.gz"
-        val primary = runCatching { downloader.download(versionedUrl, destination, gunzip = false) }
+        val primary = runCatching {
+            downloadWithProgress("DeskFleet daemon (v$versionName)", versionedUrl, destination, gunzip = false)
+        }
         if (primary.isSuccess) return
+        emitWarning("Release v$versionName daemon archive unavailable; trying latest release...")
         val latestUrl = "https://github.com/yet-another-ai/deskfleet/releases/latest/download/deskfleet-linux-arm64.tar.gz"
-        downloader.download(latestUrl, destination, gunzip = false)
+        downloadWithProgress("DeskFleet daemon (latest)", latestUrl, destination, gunzip = false)
     }
+
+    private fun downloadWithProgress(label: String, url: String, destination: File, gunzip: Boolean) {
+        emitStep("Downloading $label...")
+        var sawProgress = false
+        try {
+            downloader.download(url, destination, gunzip) { downloaded, total ->
+                sawProgress = true
+                val line = if (total > 0L) {
+                    val pct = ((downloaded * 100L) / total).coerceIn(0L, 100L)
+                    "Downloaded ${formatByteCount(downloaded)} / ${formatByteCount(total)} ($pct%)"
+                } else {
+                    "Downloaded ${formatByteCount(downloaded)}"
+                }
+                onLog("\r\u001b[2K  $line")
+            }
+        } finally {
+            if (sawProgress) onLog("\n")
+        }
+    }
+
+    private fun drainDaemonLog(logFile: File, offset: Long): Long {
+        if (!logFile.isFile) return offset
+        val length = logFile.length()
+        if (length == offset) return offset
+        val start = if (length < offset) 0L else offset
+        return runCatching {
+            RandomAccessFile(logFile, "r").use { raf ->
+                raf.seek(start)
+                val buf = ByteArray(8192)
+                var pos = start
+                while (pos < length) {
+                    val maxRead = (length - pos).coerceAtMost(buf.size.toLong()).toInt()
+                    val read = raf.read(buf, 0, maxRead)
+                    if (read <= 0) break
+                    onLog(String(buf, 0, read, Charsets.UTF_8))
+                    pos += read
+                }
+                pos
+            }
+        }.getOrDefault(start)
+    }
+
+    private fun formatByteCount(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val kib = bytes / 1024.0
+        if (kib < 1024.0) return String.format(Locale.US, "%.1f KiB", kib)
+        return String.format(Locale.US, "%.1f MiB", kib / 1024.0)
+    }
+
+    private fun emitStep(text: String) = onLog("\u001b[1;36m==> $text\u001b[0m\n")
+
+    private fun emitInfo(text: String) = onLog("  $text\n")
+
+    private fun emitSuccess(text: String) = onLog("\u001b[1;32m✓ $text\u001b[0m\n")
+
+    private fun emitWarning(text: String) = onLog("\u001b[33m! $text\u001b[0m\n")
+
+    private fun emitError(text: String) = onLog("\u001b[1;31m✗ $text\u001b[0m\n")
 
     private fun isDaemonReady(): Boolean {
         if (!daemonBin.exists()) return false
@@ -365,10 +561,22 @@ internal class ProotDaemonManager(
     private fun runInProot(commandArgs: List<String>, stdin: String? = null): ShellResult =
         runner.run(buildProotInvocation(nativeLibraryDir, baseDir, commandArgs), stdin)
 
-    private fun runCheckedInProot(commandArgs: List<String>, stdin: String? = null): ShellResult {
-        val result = runInProot(commandArgs, stdin)
+    private fun runCheckedInProot(
+        commandArgs: List<String>,
+        stdin: String? = null,
+        streamOutput: Boolean = false,
+    ): ShellResult {
+        val invocation = buildProotInvocation(nativeLibraryDir, baseDir, commandArgs)
+        val result = if (streamOutput) {
+            runner.runStreaming(invocation, stdin, onLog)
+        } else {
+            runner.run(invocation, stdin)
+        }
         if (result.exitCode != 0) {
             val detail = result.stderr.trim().ifEmpty { result.stdout.trim() }.ifEmpty { "exit code ${result.exitCode}" }
+            if (!streamOutput && result.stderr.isNotBlank()) {
+                emitError(result.stderr.trim())
+            }
             throw IllegalStateException("Container command failed: $detail")
         }
         return result

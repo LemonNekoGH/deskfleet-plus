@@ -1694,6 +1694,8 @@
     "localRevoked": "重新连接此团队，并保留原有会话。",
     "localConnected": "已连接到 {team}。",
     "connecting": "正在连接…",
+    "localProgress": "正在配置本地环境…",
+    "localOutput": "配置输出",
     "other": "其他机器",
     "otherDescription": "运行 deskfleet-daemon 的服务器或其他电脑。",
     "android": "Android（Termux）",

@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { vSpringHover } from "../../directives/spring.ts"
 import UiButton from "../common/UiButton.vue"
-import { ChevronRight, ExternalLink, Laptop, Server, Smartphone } from "@lucide/vue"
-import { whenever } from "@vueuse/core"
+import { ChevronRight, ExternalLink, Laptop, LoaderCircle, Server, Smartphone, Terminal } from "@lucide/vue"
+import { watchImmediate, whenever } from "@vueuse/core"
 import { DialogDescription, DialogTitle } from "reka-ui"
-import { computed, nextTick, ref, useId, useTemplateRef } from "vue"
+import { computed, nextTick, onBeforeUnmount, ref, useId, useTemplateRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { useAccountSession } from "../../composables/useAccountSession.ts"
 import { androidDaemonGuideUrl } from "../../desktop-download.ts"
 import CopyField from "../common/CopyField.vue"
 import UiDialog from "../common/UiDialog.vue"
+import TerminalSurface from "../terminal/TerminalSurface.vue"
 import { parseDaemonStatus } from "./daemon-status.ts"
 
 const emit = defineEmits<{ close: [] }>()
@@ -21,6 +22,7 @@ const session = useAccountSession()!
 const statusInput = useTemplateRef<HTMLTextAreaElement>("statusInput")
 const localName = useTemplateRef<HTMLInputElement>("localName")
 const credentialField = useTemplateRef<InstanceType<typeof CopyField>>("credentialField")
+const localTerminal = useTemplateRef<InstanceType<typeof TerminalSurface>>("localTerminal")
 // The desktop can register the daemon it hosts; every client can register another machine.
 const step = ref<"choose" | "local" | "headless" | "credentials">(session.central.enrollLocal ? "choose" : "headless")
 const statusText = ref("")
@@ -30,6 +32,21 @@ const nameEdited = ref(false)
 const pending = ref(false)
 const error = ref<string>()
 const credentials = ref("")
+const localOutput = ref("")
+const supportsLocalTerminal = computed(() => typeof session.central.onLocalEnrollmentOutput === "function")
+const showLocalTerminal = computed(() => step.value === "local" && supportsLocalTerminal.value && (pending.value || localOutput.value.length > 0))
+const textEncoder = new TextEncoder()
+let renderedLocalOutput = ""
+let stopLocalOutput: (() => void) | undefined
+watchImmediate([localTerminal, localOutput], ([surface, output], [previousSurface]) => {
+  if (!surface) { renderedLocalOutput = ""; return }
+  if (surface !== previousSurface) renderedLocalOutput = ""
+  if (!output.startsWith(renderedLocalOutput)) { surface.reset(); renderedLocalOutput = "" }
+  if (output.length > renderedLocalOutput.length) {
+    surface.write(textEncoder.encode(output.slice(renderedLocalOutput.length)))
+  }
+  renderedLocalOutput = output
+}, { flush: "post" })
 const team = computed(() => session.team.value)
 const parsed = computed(() => {
   if (!statusText.value.trim()) return undefined
@@ -63,14 +80,32 @@ async function run(work: () => Promise<void>): Promise<void> {
 async function chooseLocal(): Promise<void> {
   step.value = "local"
   error.value = undefined
+  localOutput.value = ""
   name.value = session.localStatus.value?.machineName ?? ""
   await nextTick()
   localName.value?.focus()
   localName.value?.select()
 }
 const connectThisComputer = () => run(async () => {
-  await session.enrollLocal(name.value.trim())
-  dialog.value?.close()
+  stopLocalOutput?.()
+  stopLocalOutput = undefined
+  localOutput.value = ""
+  renderedLocalOutput = ""
+  localTerminal.value?.reset()
+  stopLocalOutput = session.central.onLocalEnrollmentOutput?.(chunk => {
+    localOutput.value += chunk
+  })
+  try {
+    await session.enrollLocal(name.value.trim())
+    dialog.value?.close()
+  } finally {
+    stopLocalOutput?.()
+    stopLocalOutput = undefined
+  }
+})
+onBeforeUnmount(() => {
+  stopLocalOutput?.()
+  stopLocalOutput = undefined
 })
 async function chooseHeadless(): Promise<void> {
   step.value = "headless"
@@ -95,7 +130,7 @@ function focusInitial(event: Event): void {
 </script>
 
 <template>
-  <UiDialog ref="dialog" class="w-[34rem]" described :prevent-close="pending" @close="emit('close')" @open-auto-focus="focusInitial">
+  <UiDialog ref="dialog" :class="showLocalTerminal ? 'w-[min(48rem,calc(100vw-2rem))]' : 'w-[34rem]'" described :prevent-close="pending" @close="emit('close')" @open-auto-focus="focusInitial">
     <DialogTitle class="ui-dialog-title">{{ t(step === "credentials" ? "addMachine.finishTitle" : "addMachine.title", { team: team?.name ?? "" }) }}</DialogTitle>
     <DialogDescription class="ui-dialog-description mb-5">{{ t(step === "credentials" ? "addMachine.finishDescription" : "addMachine.description") }}</DialogDescription>
 
@@ -142,9 +177,23 @@ function focusInitial(event: Event): void {
         <input ref="localName" v-model="name" name="machine-name" class="ui-input text-sm text-ui-text" required maxlength="200" autocomplete="off" :disabled="pending" :aria-describedby="`${id}-local-name`" />
         <span :id="`${id}-local-name`" class="text-xs">{{ t("addMachine.nameHint") }}</span>
       </label>
+      <section
+        v-if="showLocalTerminal"
+        class="flex flex-col overflow-hidden rounded-xl border border-ui-border text-sm"
+        data-local-enrollment-setup
+      >
+        <div class="flex items-center gap-2 border-b border-ui-border px-3 py-2 text-xs text-ui-text-muted">
+          <LoaderCircle v-if="pending" :size="14" :stroke-width="2" class="shrink-0 animate-spin" aria-hidden="true" />
+          <Terminal v-else :size="14" :stroke-width="1.75" class="shrink-0" aria-hidden="true" />
+          <span role="status" class="min-w-0 flex-1 truncate">{{ t(pending ? "addMachine.localProgress" : "addMachine.localOutput") }}</span>
+        </div>
+        <div class="flex h-64 min-h-0 bg-ui-terminal sm:h-80" data-local-enrollment-terminal>
+          <TerminalSurface ref="localTerminal" tools convert-eol />
+        </div>
+      </section>
       <p v-if="error" role="alert" class="m-0 text-sm text-ui-danger">{{ error }}</p>
       <div class="flex justify-end gap-2">
-        <UiButton type="button" class="mr-auto" :disabled="pending" @click="step = 'choose'; error = undefined">{{ t("addMachine.back") }}</UiButton>
+        <UiButton type="button" class="mr-auto" :disabled="pending" @click="step = 'choose'; error = undefined; localOutput = ''">{{ t("addMachine.back") }}</UiButton>
         <UiButton type="button" :disabled="pending" @click="close">{{ t("catalog.cancel") }}</UiButton>
         <UiButton variant="primary" type="submit" :loading="pending" :disabled="pending || !name.trim()">{{ pending ? t("addMachine.connecting") : t("addMachine.connect") }}</UiButton>
       </div>

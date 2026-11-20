@@ -53,6 +53,9 @@ class DeskFleetBridge : Plugin() {
             versionName = versionName,
             fallbackMachineName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
             assetOpener = EmbeddedAssetOpener { name -> runCatching { context.assets.open(name) }.getOrNull() },
+            onLog = { chunk ->
+                notifyListeners("localDaemonLog", JSObject().put("chunk", chunk))
+            },
         ).also { prootDaemon = it }
     }
 

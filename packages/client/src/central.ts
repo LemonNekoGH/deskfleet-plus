@@ -146,6 +146,8 @@ export interface CentralApi {
   localEnrollment?(): Promise<LocalMachineStatus>
   /** The name defaults to this computer's hostname. */
   enrollLocal?(teamId: string, name?: string): Promise<LocalEnrollment>
+  /** Subscribe to streaming setup terminal output during `enrollLocal`, when hosted by an embedded runtime. */
+  onLocalEnrollmentOutput?(listener: (chunk: string) => void): () => void
   catalog(teamId: string, machineId: string): Promise<{ machineId: string; snapshot: CatalogSnapshot; lastObservedAt: string; providers?: ProviderDisplaySnapshot }>
   sessions(teamId: string, machineId: string, sessionId?: string): Promise<AgentSessionSummary[]>
   session(teamId: string, machineId: string, sessionId: string): Promise<{ snapshot: AgentSnapshot; lastEventSeq: string; lastObservedAt: string }>

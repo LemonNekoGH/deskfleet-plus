@@ -1694,6 +1694,8 @@
     "localRevoked": "Reconnect this Team and retain its previous Sessions.",
     "localConnected": "Already connected to {team}.",
     "connecting": "Connecting…",
+    "localProgress": "Setting up local environment…",
+    "localOutput": "Setup output",
     "other": "Another machine",
     "otherDescription": "A server or another computer running deskfleet-daemon.",
     "android": "Android (Termux)",

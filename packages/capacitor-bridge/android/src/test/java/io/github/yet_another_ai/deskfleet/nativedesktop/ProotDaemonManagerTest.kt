@@ -303,4 +303,126 @@ class ProotDaemonManagerTest {
         assertEquals("0.18.2", File(baseDir, "version").readText())
         assertFalse(File(cacheDir, "debian-rootfs.tar").exists())
     }
+
+    @Test
+    fun enrollmentStreamsDownloadProgressCommandsAndDaemonLogWithoutLeakingSecrets() {
+        val baseDir = File(filesDir, "linux")
+        val rootfs = File(baseDir, "rootfs")
+        val logs = StringBuilder()
+
+        val manager = ProotDaemonManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            nativeLibraryDir = nativeDir,
+            versionName = "0.19.0",
+            fallbackMachineName = "Phone",
+            runner = object : ProotRunner {
+                private var polls = 0
+
+                override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+                    val cmd = invocation.args
+                    return when {
+                        cmd.last() == "status" -> {
+                            polls += 1
+                            when (polls) {
+                                1 -> ShellResult(1, "", "not running")
+                                2 -> {
+                                    File(baseDir, "daemon.log").appendText("Listening for DeskFleet central\n")
+                                    ShellResult(1, "", "starting")
+                                }
+                                else -> {
+                                    File(baseDir, "daemon.log").appendText("Daemon control server ready\n")
+                                    ShellResult(0, """{"machineName":"Phone","registrations":[]}""", "")
+                                }
+                            }
+                        }
+                        cmd.contains("prepare-enrollment") -> ShellResult(
+                            0,
+                            """{"configured":false,"connected":false,"revoked":false,"identity":{"originId":"o1","machineId":"1"},"machineName":"Phone","identityToken":"super-secret-id-token"}""",
+                            "",
+                        )
+                        cmd.contains("enroll") -> ShellResult(
+                            0,
+                            """{"configured":true,"connected":true,"revoked":false,"serverUrl":"https://fleet.example","machineId":"m1","teamId":"t1","identity":{"originId":"o1","machineId":"1"},"machineName":"Phone"}""",
+                            "",
+                        )
+                        else -> ShellResult(1, "", "unexpected: $cmd")
+                    }
+                }
+
+                override fun runStreaming(
+                    invocation: ProotInvocation,
+                    stdin: String?,
+                    onOutput: (String) -> Unit,
+                ): ShellResult {
+                    val cmd = invocation.args
+                    return when {
+                        cmd.contains("/system/bin/tar") -> {
+                            onOutput("tar: extracting usr/bin/env\n")
+                            File(rootfs, "bin").mkdirs()
+                            File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
+                            ShellResult(0, "tar: extracting usr/bin/env\n", "")
+                        }
+                        cmd.any { it.contains("apt-get") } -> {
+                            onOutput("Setting up adb (34.0.5)...\n")
+                            ShellResult(0, "Setting up adb (34.0.5)...\n", "")
+                        }
+                        cmd.any { it.contains("tar -xzf /tmp/deskfleet-linux-arm64.tar.gz") } -> {
+                            onOutput("deskfleet-daemon unpacked\n")
+                            File(rootfs, "opt/deskfleet").mkdirs()
+                            File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("elf")
+                            ShellResult(0, "deskfleet-daemon unpacked\n", "")
+                        }
+                        else -> run(invocation, stdin)
+                    }
+                }
+            },
+            downloader = object : AssetDownloader {
+                override fun download(url: String, destination: File, gunzip: Boolean) {
+                    download(url, destination, gunzip, null)
+                }
+
+                override fun download(
+                    url: String,
+                    destination: File,
+                    gunzip: Boolean,
+                    onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)?,
+                ) {
+                    onProgress?.invoke(512L * 1024L, 1024L * 1024L)
+                    onProgress?.invoke(1024L * 1024L, 1024L * 1024L)
+                    destination.parentFile?.mkdirs()
+                    destination.writeText("mock-debian")
+                }
+            },
+            sleepMillis = { },
+            assetOpener = EmbeddedAssetOpener { assetName ->
+                when (assetName) {
+                    ProotDaemonManager.EMBEDDED_DAEMON_ASSET -> ByteArrayInputStream("daemon".toByteArray())
+                    ProotDaemonManager.EMBEDDED_SCRCPY_ASSET -> ByteArrayInputStream("scrcpy".toByteArray())
+                    else -> null
+                }
+            },
+            onLog = { chunk -> logs.append(chunk) },
+        )
+
+        val prepared = manager.prepareEnrollment("https://fleet.example", "team-1") {
+            baseDir.mkdirs()
+            File(baseDir, "daemon.log").writeText("Starting proot daemon container\n")
+        }
+        assertTrue(prepared.contains("super-secret-id-token"))
+        manager.enroll("https://fleet.example", """{"machineId":"m1","teamId":"t1","token":"super-secret-machine-token","originId":"o1"}""")
+
+        val output = logs.toString()
+        assertTrue(output.contains("Downloading Debian rootfs..."))
+        assertTrue(output.contains("Downloaded 512.0 KiB / 1.0 MiB (50%)"))
+        assertTrue(output.contains("Downloaded 1.0 MiB / 1.0 MiB (100%)"))
+        assertTrue(output.contains("tar: extracting usr/bin/env"))
+        assertTrue(output.contains("Setting up adb (34.0.5)..."))
+        assertTrue(output.contains("Starting proot daemon container"))
+        assertTrue(output.contains("Listening for DeskFleet central"))
+        assertTrue(output.contains("Daemon control server ready"))
+        assertTrue(output.contains("Local daemon enrolled."))
+        assertFalse(output.contains("super-secret-id-token"))
+        assertFalse(output.contains("super-secret-machine-token"))
+    }
 }
