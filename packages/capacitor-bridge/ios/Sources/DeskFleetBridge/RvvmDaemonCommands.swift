@@ -4,6 +4,15 @@ import Foundation
 /// Pure Foundation command builders and framed UART-exec helpers for the embedded
 /// riscv64 Linux guest running under librvvm.
 internal enum RvvmDaemonCommands {
+    struct ProxyConfig: Equatable {
+        let httpProxy: String?
+        let httpsProxy: String?
+
+        var hasAny: Bool {
+            (httpProxy?.isEmpty == false) || (httpsProxy?.isEmpty == false)
+        }
+    }
+
     static let daemonBinaryPath = "/opt/deskfleet/deskfleet-daemon"
     static let daemonPidFile = "/run/deskfleet-daemon.pid"
     static let daemonLogFile = "/var/log/deskfleet-daemon.log"
@@ -13,6 +22,14 @@ internal enum RvvmDaemonCommands {
 
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    static func isValidIpv4(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            !part.isEmpty && part.allSatisfy(\.isNumber) && UInt8(part) != nil
+        }
     }
 
     static func credentialsJson(
@@ -52,16 +69,111 @@ internal enum RvvmDaemonCommands {
         return "printf '%s' \(shellQuote(encoded)) | base64 -d | \(shellQuote(daemonBinaryPath)) enroll --server-url \(shellQuote(serverUrl))"
     }
 
-    static func ensureDaemonRunningCommand() -> String {
+    static func nodeOptions(proxy: ProxyConfig? = nil) -> String {
+        proxy?.hasAny == true
+            ? "--jitless --dns-result-order=ipv4first --use-env-proxy"
+            : "--jitless --dns-result-order=ipv4first"
+    }
+
+    static func configureGuestNetworkAndClockCommand(unixSeconds: Int64, dnsServers: [String]) -> String {
+        var resolvedDns: [String] = []
+        for candidate in dnsServers + ["1.1.1.1", "8.8.8.8"] {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isValidIpv4(trimmed), !resolvedDns.contains(trimmed) else { continue }
+            resolvedDns.append(trimmed)
+        }
+        let resolvLines = resolvedDns.map { "nameserver \($0)" }.joined(separator: "\n")
+        return """
+        date -u -s '@\(unixSeconds)' >/dev/null 2>&1 || true
+        cat <<'EOF' >/etc/resolv.conf
+        \(resolvLines)
+        EOF
+        i=1
+        while [ "$i" -le 15 ]; do
+          if ip -4 route show default 2>/dev/null | grep -q default; then
+            break
+          fi
+          if [ "$i" -eq 5 ]; then
+            (command -v networkctl >/dev/null 2>&1 && networkctl reconfigure enp0s1) >/dev/null 2>&1 || ip link set enp0s1 up >/dev/null 2>&1 || true
+          fi
+          i=$((i + 1))
+          sleep 1
+        done
+        ip_summary=$(ip -4 -o addr show dev enp0s1 2>/dev/null | awk '{print $4}' | tr '\\n' ' ' | sed 's/ *$//' || true)
+        gw_summary=$(ip -4 route show default 2>/dev/null | awk '{print $3}' | head -n 1 || true)
+        printf 'IP=%s GW=%s\\n' "${ip_summary:-none}" "${gw_summary:-none}"
         """
+    }
+
+    static func ensureDaemonRunningCommand(proxy: ProxyConfig? = nil) -> String {
+        var envLines = [
+            "export HOME=/root",
+            "export NODE_OPTIONS=\(shellQuote(nodeOptions(proxy: proxy)))",
+        ]
+        if let proxy, proxy.hasAny {
+            envLines.append("export NODE_USE_ENV_PROXY=1")
+            if let httpProxy = proxy.httpProxy, !httpProxy.isEmpty {
+                envLines.append("export HTTP_PROXY=\(shellQuote(httpProxy))")
+            }
+            if let httpsProxy = proxy.httpsProxy, !httpsProxy.isEmpty {
+                envLines.append("export HTTPS_PROXY=\(shellQuote(httpsProxy))")
+            }
+            envLines.append("export NO_PROXY='localhost,127.0.0.1,::1'")
+        }
+        return """
         mkdir -p /run /var/log /opt/deskfleet /root/.deskfleet
-        export HOME=/root
+        \(envLines.joined(separator: "\n"))
         if [ -f \(shellQuote(daemonPidFile)) ] && kill -0 "$(cat \(shellQuote(daemonPidFile)))" 2>/dev/null; then
           exit 0
         fi
         nohup \(shellQuote(daemonBinaryPath)) </dev/null >>\(shellQuote(daemonLogFile)) 2>&1 3>&- &
         echo $! >\(shellQuote(daemonPidFile))
         """
+    }
+
+    static func networkDiagnosticCommand(serverUrl: String, proxy: ProxyConfig? = nil) -> String {
+        let base = serverUrl.hasSuffix("/") ? String(serverUrl.dropLast()) : serverUrl
+        let probeUrl = "\(base)/api/site"
+        let opts = nodeOptions(proxy: proxy)
+        var proxyLines: [String] = []
+        if let proxy, proxy.hasAny {
+            proxyLines.append("export NODE_USE_ENV_PROXY=1")
+            if let httpProxy = proxy.httpProxy, !httpProxy.isEmpty {
+                proxyLines.append("export HTTP_PROXY=\(shellQuote(httpProxy))")
+            }
+            if let httpsProxy = proxy.httpsProxy, !httpsProxy.isEmpty {
+                proxyLines.append("export HTTPS_PROXY=\(shellQuote(httpsProxy))")
+            }
+            proxyLines.append("export NO_PROXY='localhost,127.0.0.1,::1'")
+        }
+        let proxyPrefix = proxyLines.isEmpty ? "" : "\(proxyLines.joined(separator: "\n"))\n"
+        let probeScript = "fetch(process.argv[1]).then(r=>console.log('PROBE_HTTP '+r.status)).catch(e=>{const c=e&&e.cause?e.cause:{};console.log(['PROBE_ERR',e&&e.message||String(e),c.code||'',c.syscall||'',c.message||''].join(' '))})"
+        return """
+        echo '--- date ---'
+        date -u 2>&1 || true
+        echo '--- ip addr ---'
+        ip -4 -o addr show 2>&1 || true
+        echo '--- ip route ---'
+        ip -4 route show 2>&1 || true
+        echo '--- resolv.conf ---'
+        cat /etc/resolv.conf 2>/dev/null || true
+        echo '--- node fetch probe ---'
+        \(proxyPrefix)timeout 12 /opt/deskfleet/node \(opts) -e \(shellQuote(probeScript)) \(shellQuote(probeUrl)) 2>&1 || true
+        echo '--- daemon log tail ---'
+        tail -n 20 \(shellQuote(daemonLogFile)) 2>/dev/null || true
+        """
+    }
+
+    static func extractProbeError(from output: String) -> String? {
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("PROBE_ERR ") {
+                let detail = String(trimmed.dropFirst("PROBE_ERR ".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return detail.isEmpty ? nil : detail
+            }
+        }
+        return nil
     }
 
     static func daemonLogSizeCommand() -> String {

@@ -3,9 +3,12 @@
 #include "RvvmRamDonor.h"
 
 #include <TargetConditionals.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <pthread.h>
+#include <resolv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -643,4 +646,69 @@ bool rvvm_host_gunzip_file_with_progress(
 
 bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len) {
     return rvvm_host_gunzip_file_with_progress(src_gz_path, dst_raw_path, NULL, NULL, error_buf, error_buf_len);
+}
+
+size_t rvvm_host_copy_ipv4_dns_servers(char* out_buf, size_t out_buf_len) {
+    if (!out_buf || out_buf_len == 0) {
+        return 0;
+    }
+    out_buf[0] = '\0';
+
+    struct __res_state state;
+    memset(&state, 0, sizeof(state));
+    if (res_ninit(&state) != 0) {
+        return 0;
+    }
+
+    union res_sockaddr_union servers[10];
+    memset(servers, 0, sizeof(servers));
+    int count = res_getservers(&state, servers, 10);
+
+    char   seen[10][INET_ADDRSTRLEN];
+    size_t seen_count = 0;
+    size_t written    = 0;
+
+    for (int i = 0; i < count && i < 10; ++i) {
+        if (servers[i].sin.sin_family != AF_INET) {
+            continue;
+        }
+        uint32_t addr_host = ntohl(servers[i].sin.sin_addr.s_addr);
+        uint8_t  first     = (uint8_t)((addr_host >> 24) & 0xFFU);
+        uint8_t  second    = (uint8_t)((addr_host >> 16) & 0xFFU);
+        if (first == 0 || first == 127 || (first == 169 && second == 254)) {
+            continue;
+        }
+
+        char ip_str[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &servers[i].sin.sin_addr, ip_str, sizeof(ip_str))) {
+            continue;
+        }
+
+        bool duplicate = false;
+        for (size_t j = 0; j < seen_count; ++j) {
+            if (strcmp(seen[j], ip_str) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate || seen_count >= 10) {
+            continue;
+        }
+        snprintf(seen[seen_count++], INET_ADDRSTRLEN, "%s", ip_str);
+
+        size_t ip_len = strlen(ip_str);
+        size_t needed = (written > 0 ? 1 : 0) + ip_len + 1;
+        if (written + needed > out_buf_len) {
+            break;
+        }
+        if (written > 0) {
+            out_buf[written++] = '\n';
+        }
+        memcpy(out_buf + written, ip_str, ip_len);
+        written += ip_len;
+        out_buf[written] = '\0';
+    }
+
+    res_ndestroy(&state);
+    return written;
 }

@@ -1,4 +1,5 @@
 // Copyright (c) DeskFleet contributors. Licensed under the Apache License, Version 2.0.
+import CFNetwork
 import Foundation
 import RvvmRuntime
 import UIKit
@@ -23,6 +24,7 @@ internal final class RvvmDaemonManager {
     private var nextRequestId: UInt64 = 1
     private var rxBuffer = Data()
     private var guestReady = false
+    private var guestNetworkConfigured = false
 
     init(
         versionName: String,
@@ -104,11 +106,35 @@ internal final class RvvmDaemonManager {
     ) throws -> [String: Any] {
         try ensureRunningAndProvisioned(presenterProvider: presenterProvider)
         emitStep("Saving machine credentials into local daemon...")
+        let proxy = resolveSystemProxy()
         let cmd = RvvmDaemonCommands.enrollCommand(serverUrl: serverUrl, credentialsJson: credentialsJson)
-        let output = try execInGuest(cmd, timeoutSeconds: 60)
+        let output: String
+        do {
+            output = try execInGuest(cmd, timeoutSeconds: 60)
+        } catch {
+            emitStep("Collecting guest network diagnostics...")
+            if let diag = try? execInGuest(
+                RvvmDaemonCommands.networkDiagnosticCommand(serverUrl: serverUrl, proxy: proxy),
+                timeoutSeconds: 25
+            ) {
+                let trimmedDiag = diag.trimmingCharacters(in: .newlines)
+                if !trimmedDiag.isEmpty {
+                    onLog("\(trimmedDiag)\n")
+                }
+                if let probeErr = RvvmDaemonCommands.extractProbeError(from: trimmedDiag) {
+                    let combined = "\(error.localizedDescription) (\(probeErr))"
+                    throw NSError(
+                        domain: "RvvmDaemonManager",
+                        code: (error as NSError).code,
+                        userInfo: [NSLocalizedDescriptionKey: combined]
+                    )
+                }
+            }
+            throw error
+        }
         let enrolled = try RvvmDaemonCommands.extractJsonObject(from: output)
         emitSuccess("Local daemon enrolled.")
-        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(), timeoutSeconds: 20)
+        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
         return enrolled
     }
 
@@ -126,6 +152,7 @@ internal final class RvvmDaemonManager {
         let handle = vmHandle
         vmHandle = nil
         guestReady = false
+        guestNetworkConfigured = false
         stateLock.unlock()
         if let handle {
             rvvm_host_stop(handle)
@@ -233,6 +260,7 @@ internal final class RvvmDaemonManager {
         if let vmHandle, rvvm_host_is_running(vmHandle) {
             stateLock.unlock()
             try waitForGuestExecAgent(timeoutSeconds: 90, consoleLogURL: nil, initialConsoleOffset: 0)
+            configureGuestNetworkAndClock()
             return
         }
         stateLock.unlock()
@@ -291,6 +319,7 @@ internal final class RvvmDaemonManager {
         stateLock.lock()
         vmHandle = startedHandle
         guestReady = false
+        guestNetworkConfigured = false
         rxBuffer.removeAll(keepingCapacity: false)
         stateLock.unlock()
 
@@ -299,6 +328,79 @@ internal final class RvvmDaemonManager {
             consoleLogURL: consoleLogURL,
             initialConsoleOffset: initialConsoleOffset
         )
+        configureGuestNetworkAndClock()
+    }
+
+    private func resolveHostIpv4DnsServers() -> [String] {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        let written = rvvm_host_copy_ipv4_dns_servers(&buffer, buffer.count)
+        guard written > 0 else { return [] }
+        let raw = String(cString: buffer)
+        return raw
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func resolveSystemProxy() -> RvvmDaemonCommands.ProxyConfig? {
+        guard let raw = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any] else {
+            return nil
+        }
+        func proxyEndpoint(enableKey: String, hostKey: String, portKey: String) -> String? {
+            guard let enabled = raw[enableKey] as? NSNumber, enabled.boolValue,
+                  let hostRaw = raw[hostKey] as? String else {
+                return nil
+            }
+            let host = hostRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            let lower = host.lowercased()
+            if lower == "localhost" || lower == "127.0.0.1" || lower == "::1" || lower == "0.0.0.0" {
+                return nil
+            }
+            if let portNum = raw[portKey] as? NSNumber, portNum.intValue > 0 {
+                return "http://\(host):\(portNum.intValue)"
+            }
+            return "http://\(host)"
+        }
+        let http = proxyEndpoint(enableKey: "HTTPEnable", hostKey: "HTTPProxy", portKey: "HTTPPort")
+        let https = proxyEndpoint(enableKey: "HTTPSEnable", hostKey: "HTTPSProxy", portKey: "HTTPSPort") ?? http
+        let config = RvvmDaemonCommands.ProxyConfig(httpProxy: http, httpsProxy: https)
+        return config.hasAny ? config : nil
+    }
+
+    private func configureGuestNetworkAndClock() {
+        stateLock.lock()
+        if guestNetworkConfigured {
+            stateLock.unlock()
+            return
+        }
+        stateLock.unlock()
+
+        let dnsServers = resolveHostIpv4DnsServers()
+        let proxy = resolveSystemProxy()
+        emitStep("Configuring Linux guest network, DNS, and clock...")
+        let unixSeconds = Int64(Date().timeIntervalSince1970)
+        let cmd = RvvmDaemonCommands.configureGuestNetworkAndClockCommand(
+            unixSeconds: unixSeconds,
+            dnsServers: dnsServers
+        )
+        if let summary = try? execInGuest(cmd, timeoutSeconds: 25) {
+            let clean = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !clean.isEmpty {
+                emitInfo(clean)
+            }
+        }
+        emitInfo("DNS: \(dnsServers.isEmpty ? "fallback 1.1.1.1, 8.8.8.8" : dnsServers.joined(separator: ", "))")
+        if let proxy, proxy.hasAny {
+            let desc = [proxy.httpProxy.map { "http=\($0)" }, proxy.httpsProxy.map { "https=\($0)" }]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            emitInfo("Proxy: \(desc)")
+        }
+
+        stateLock.lock()
+        guestNetworkConfigured = true
+        stateLock.unlock()
     }
 
     private func guestReleaseBaseURL() -> String {
@@ -337,7 +439,8 @@ internal final class RvvmDaemonManager {
         let initialOffset = UInt64(logSizeRaw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
 
         emitStep("Starting local deskfleet-daemon service...")
-        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(), timeoutSeconds: 20)
+        let proxy = resolveSystemProxy()
+        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
         try waitForGuestDaemonReady(initialLogOffset: initialOffset, timeoutSeconds: 60)
     }
 

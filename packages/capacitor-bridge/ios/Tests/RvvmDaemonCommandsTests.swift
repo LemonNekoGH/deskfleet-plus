@@ -136,4 +136,52 @@ final class RvvmDaemonCommandsTests: XCTestCase {
         XCTAssertEqual(RvvmDaemonCommands.formatByteCount(1536), "1.5 KiB")
         XCTAssertEqual(RvvmDaemonCommands.formatByteCount(342 * 1024 * 1024), "342.0 MiB")
     }
+
+    func testConfigureGuestNetworkAndClockCommandWritesUniqueDnsAndWaitsForRoute() {
+        let cmd = RvvmDaemonCommands.configureGuestNetworkAndClockCommand(
+            unixSeconds: 1_763_700_000,
+            dnsServers: ["198.18.0.2", "1.1.1.1", "198.18.0.2", "bad-ip", "10.0.0.1"]
+        )
+        XCTAssertTrue(cmd.contains("date -u -s '@1763700000'"))
+        XCTAssertTrue(cmd.contains("nameserver 198.18.0.2\nnameserver 1.1.1.1\nnameserver 10.0.0.1\nnameserver 8.8.8.8"))
+        XCTAssertTrue(cmd.contains("ip -4 route show default"))
+        XCTAssertTrue(cmd.contains("networkctl reconfigure enp0s1"))
+    }
+
+    func testEnsureDaemonRunningCommandConfiguresIpv4FirstAndOptionalProxy() {
+        let plain = RvvmDaemonCommands.ensureDaemonRunningCommand()
+        XCTAssertTrue(plain.contains("--jitless --dns-result-order=ipv4first"))
+        XCTAssertFalse(plain.contains("NODE_USE_ENV_PROXY=1"))
+
+        let proxied = RvvmDaemonCommands.ensureDaemonRunningCommand(
+            proxy: RvvmDaemonCommands.ProxyConfig(
+                httpProxy: "http://192.168.1.2:7890",
+                httpsProxy: "http://192.168.1.2:7890"
+            )
+        )
+        XCTAssertTrue(proxied.contains("--jitless --dns-result-order=ipv4first --use-env-proxy"))
+        XCTAssertTrue(proxied.contains("export NODE_USE_ENV_PROXY=1"))
+        XCTAssertTrue(proxied.contains("export HTTP_PROXY='http://192.168.1.2:7890'"))
+        XCTAssertTrue(proxied.contains("export HTTPS_PROXY='http://192.168.1.2:7890'"))
+        XCTAssertTrue(proxied.contains("export NO_PROXY='localhost,127.0.0.1,::1'"))
+    }
+
+    func testNetworkDiagnosticCommandAndProbeErrorExtraction() {
+        let diag = RvvmDaemonCommands.networkDiagnosticCommand(
+            serverUrl: "https://deskfleet.yetanother.ai/",
+            proxy: RvvmDaemonCommands.ProxyConfig(
+                httpProxy: "http://192.168.1.2:7890",
+                httpsProxy: nil
+            )
+        )
+        XCTAssertTrue(diag.contains("https://deskfleet.yetanother.ai/api/site"))
+        XCTAssertTrue(diag.contains("export NODE_USE_ENV_PROXY=1"))
+        XCTAssertTrue(diag.contains("/etc/resolv.conf"))
+
+        XCTAssertNil(RvvmDaemonCommands.extractProbeError(from: "PROBE_HTTP 200\n"))
+        XCTAssertEqual(
+            RvvmDaemonCommands.extractProbeError(from: "ip addr\nPROBE_ERR fetch failed ENOTFOUND getaddrinfo getaddrinfo ENOTFOUND deskfleet.yetanother.ai\n"),
+            "fetch failed ENOTFOUND getaddrinfo getaddrinfo ENOTFOUND deskfleet.yetanother.ai"
+        )
+    }
 }

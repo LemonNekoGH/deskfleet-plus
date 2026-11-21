@@ -36,6 +36,7 @@ let package = Package(
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
+                .linkedLibrary("resolv"),
                 .linkedLibrary("z")
             ]
         ),
@@ -56,6 +57,7 @@ let package = Package(
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("AuthenticationServices"),
+                .linkedFramework("CFNetwork"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("CoreGraphics"),

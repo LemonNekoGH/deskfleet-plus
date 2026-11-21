@@ -66,6 +66,10 @@ bool rvvm_host_gunzip_file_with_progress(
 /// Streams a gzip-compressed disk image into a sparse raw file on disk using zlib.
 bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len);
 
+/// Writes newline-separated unique non-loopback IPv4 DNS server strings from the iOS
+/// system resolver into out_buf and returns the byte count written.
+size_t rvvm_host_copy_ipv4_dns_servers(char* out_buf, size_t out_buf_len);
+
 #ifdef __cplusplus
 }
 #endif
