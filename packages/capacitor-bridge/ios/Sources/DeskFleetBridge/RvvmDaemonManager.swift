@@ -135,6 +135,7 @@ internal final class RvvmDaemonManager {
         let enrolled = try RvvmDaemonCommands.extractJsonObject(from: output)
         emitSuccess("Local daemon enrolled.")
         _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
+        _ = try? execInGuest("sync >/dev/null 2>&1 || true", timeoutSeconds: 10)
         return enrolled
     }
 

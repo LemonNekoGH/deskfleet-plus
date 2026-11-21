@@ -39,8 +39,8 @@ test("buildExtlinuxConf and guest rootfs Dockerfile bake nvme, r8169, exec agent
   assert.match(dockerfile, /20-rtl8169\.network/)
 
   const wrapper = buildDaemonWrapperScript()
-  assert.match(wrapper, /NODE_OPTIONS="--jitless/)
-  assert.match(wrapper, /exec "\$DIR\/node" --jitless "\$DIR\/daemon\.cjs" "\$@"/)
+  assert.doesNotMatch(wrapper, /--jitless/)
+  assert.match(wrapper, /exec "\$DIR\/node" --no-sparkplug --no-maglev --no-opt --no-regexp-tier-up --liftoff-only --no-wasm-tier-up "\$DIR\/daemon\.cjs" "\$@"/)
   assert.match(buildExecAgentScript(), /DEV="\/dev\/ttyS1"/)
   assert.match(buildExecAgentScript(), /printf '\\n%s %s %s\\n'/)
   assert.match(buildExecAgentSystemdUnit(), /ExecStart=\/usr\/local\/bin\/deskfleet-exec-agent\.sh/)

@@ -102,7 +102,11 @@ final class RvvmDaemonCommandsTests: XCTestCase {
             versionName: "1.0"
         )
         XCTAssertTrue(script.contains("deskfleet-linux-riscv64.tar.gz"))
-        XCTAssertTrue(script.contains("exit 0"))
+        XCTAssertTrue(script.contains("need_download=0"))
+        XCTAssertFalse(script.contains("--jitless"))
+        XCTAssertTrue(script.contains(RvvmDaemonCommands.nodeRuntimeFlags))
+        XCTAssertTrue(script.contains("cmp -s"))
+        XCTAssertTrue(script.contains("\nDESKFLEET_WRAPPER_EOF\n"))
     }
 
     func testDaemonProbeCommandAndOutputParsing() {
@@ -150,7 +154,9 @@ final class RvvmDaemonCommandsTests: XCTestCase {
 
     func testEnsureDaemonRunningCommandConfiguresIpv4FirstAndOptionalProxy() {
         let plain = RvvmDaemonCommands.ensureDaemonRunningCommand()
-        XCTAssertTrue(plain.contains("--jitless --dns-result-order=ipv4first"))
+        XCTAssertTrue(plain.contains("NODE_OPTIONS='--dns-result-order=ipv4first'"))
+        XCTAssertFalse(plain.contains("--jitless"))
+        XCTAssertFalse(plain.contains("--no-sparkplug"))
         XCTAssertFalse(plain.contains("NODE_USE_ENV_PROXY=1"))
 
         let proxied = RvvmDaemonCommands.ensureDaemonRunningCommand(
@@ -159,7 +165,9 @@ final class RvvmDaemonCommandsTests: XCTestCase {
                 httpsProxy: "http://192.168.1.2:7890"
             )
         )
-        XCTAssertTrue(proxied.contains("--jitless --dns-result-order=ipv4first --use-env-proxy"))
+        XCTAssertTrue(proxied.contains("NODE_OPTIONS='--dns-result-order=ipv4first --use-env-proxy'"))
+        XCTAssertFalse(proxied.contains("--jitless"))
+        XCTAssertFalse(proxied.contains("--no-sparkplug"))
         XCTAssertTrue(proxied.contains("export NODE_USE_ENV_PROXY=1"))
         XCTAssertTrue(proxied.contains("export HTTP_PROXY='http://192.168.1.2:7890'"))
         XCTAssertTrue(proxied.contains("export HTTPS_PROXY='http://192.168.1.2:7890'"))
@@ -175,6 +183,8 @@ final class RvvmDaemonCommandsTests: XCTestCase {
             )
         )
         XCTAssertTrue(diag.contains("https://deskfleet.yetanother.ai/api/site"))
+        XCTAssertTrue(diag.contains(RvvmDaemonCommands.nodeRuntimeFlags))
+        XCTAssertFalse(diag.contains("--jitless"))
         XCTAssertTrue(diag.contains("export NODE_USE_ENV_PROXY=1"))
         XCTAssertTrue(diag.contains("/etc/resolv.conf"))
 

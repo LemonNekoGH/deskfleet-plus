@@ -20,6 +20,19 @@ internal enum RvvmDaemonCommands {
     static let daemonReleaseAsset = "deskfleet-linux-riscv64.tar.gz"
     static let guestDiskArchiveAsset = "deskfleet-riscv64.img.gz"
 
+    /// Disables V8 Sparkplug/Maglev/TurboFan/Wasm tier-up (which segfault under RVVM on riscv64)
+    /// while keeping `WebAssembly` enabled so Node 24's undici `fetch`/`WebSocket` llhttp WASM works.
+    static let nodeRuntimeFlags = "--no-sparkplug --no-maglev --no-opt --no-regexp-tier-up --liftoff-only --no-wasm-tier-up"
+
+    static func daemonWrapperScript() -> String {
+        [
+            "#!/bin/sh",
+            #"DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)""#,
+            #"exec "$DIR/node" \#(nodeRuntimeFlags) "$DIR/daemon.cjs" "$@""#,
+            "",
+        ].joined(separator: "\n")
+    }
+
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
@@ -71,8 +84,8 @@ internal enum RvvmDaemonCommands {
 
     static func nodeOptions(proxy: ProxyConfig? = nil) -> String {
         proxy?.hasAny == true
-            ? "--jitless --dns-result-order=ipv4first --use-env-proxy"
-            : "--jitless --dns-result-order=ipv4first"
+            ? "--dns-result-order=ipv4first --use-env-proxy"
+            : "--dns-result-order=ipv4first"
     }
 
     static func configureGuestNetworkAndClockCommand(unixSeconds: Int64, dnsServers: [String]) -> String {
@@ -158,7 +171,7 @@ internal enum RvvmDaemonCommands {
         echo '--- resolv.conf ---'
         cat /etc/resolv.conf 2>/dev/null || true
         echo '--- node fetch probe ---'
-        \(proxyPrefix)timeout 12 /opt/deskfleet/node \(opts) -e \(shellQuote(probeScript)) \(shellQuote(probeUrl)) 2>&1 || true
+        \(proxyPrefix)timeout 12 /opt/deskfleet/node \(nodeRuntimeFlags) \(opts) -e \(shellQuote(probeScript)) \(shellQuote(probeUrl)) 2>&1 || true
         echo '--- daemon log tail ---'
         tail -n 20 \(shellQuote(daemonLogFile)) 2>/dev/null || true
         """
@@ -254,39 +267,75 @@ internal enum RvvmDaemonCommands {
         return String(format: "%.1f MiB", kib / 1024.0)
     }
 
-    /// Ensures /opt/deskfleet/deskfleet-daemon (riscv64) exists inside the Linux guest.
-    /// Uses the pre-baked binary when already present in the guest image, falling back to
-    /// downloading deskfleet-linux-riscv64.tar.gz if missing.
+    /// Ensures /opt/deskfleet/deskfleet-daemon (riscv64) exists inside the Linux guest and
+    /// keeps the launcher wrapper in sync on cached guest disk images.
     static func provisionDaemonCommand(releaseUrl: String, versionName: String) -> String {
         let versionFile = "/opt/deskfleet/.version"
         let skipVersionMismatch = versionName == "1.0" || versionName == "0.0.0"
-        let versionCheck = skipVersionMismatch
-            ? "  exit 0"
-            : """
-                if [ ! -f \(shellQuote(versionFile)) ] || [ "$(cat \(shellQuote(versionFile)))" = \(shellQuote(versionName)) ]; then
-                  exit 0
-                fi
-              """
-        return """
-        set -eu
-        mkdir -p /opt/deskfleet /var/lib/deskfleet /var/log /run /root/.deskfleet
-        if [ -x \(shellQuote(daemonBinaryPath)) ]; then
-        \(versionCheck)
-        fi
-        tmp_archive="/tmp/deskfleet-daemon-riscv64.tar.gz"
-        if command -v curl >/dev/null 2>&1; then
-          curl -fsSL \(shellQuote(releaseUrl)) -o "$tmp_archive"
-        elif command -v wget >/dev/null 2>&1; then
-          wget -qO "$tmp_archive" \(shellQuote(releaseUrl))
-        else
-          echo "Neither curl nor wget is installed in guest" >&2
-          exit 1
-        fi
-        tar -xzf "$tmp_archive" -C /opt/deskfleet
-        rm -f "$tmp_archive"
-        chmod +x \(shellQuote(daemonBinaryPath))
-        printf '%s' \(shellQuote(versionName)) >\(shellQuote(versionFile))
-        """
+        let versionCheckLines: [String] = skipVersionMismatch
+            ? ["  need_download=0"]
+            : [
+                "  if [ ! -f \(shellQuote(versionFile)) ] || [ \"$(cat \(shellQuote(versionFile)))\" = \(shellQuote(versionName)) ]; then",
+                "    need_download=0",
+                "  fi",
+            ]
+        let wrapperBody = daemonWrapperScript().trimmingCharacters(in: .newlines)
+        let qDaemon = shellQuote(daemonBinaryPath)
+        let qPid = shellQuote(daemonPidFile)
+        let qDiscovery = shellQuote(daemonDiscoveryPath)
+        let lines = [
+            "set -eu",
+            "mkdir -p /opt/deskfleet /var/lib/deskfleet /var/log /run /root/.deskfleet",
+            "need_download=1",
+            "if [ -x \(qDaemon) ]; then",
+        ] + versionCheckLines + [
+            "fi",
+            "if [ \"$need_download\" -eq 1 ]; then",
+            "  tmp_archive=\"/tmp/deskfleet-daemon-riscv64.tar.gz\"",
+            "  if command -v curl >/dev/null 2>&1; then",
+            "    curl -fsSL \(shellQuote(releaseUrl)) -o \"$tmp_archive\"",
+            "  elif command -v wget >/dev/null 2>&1; then",
+            "    wget -qO \"$tmp_archive\" \(shellQuote(releaseUrl))",
+            "  else",
+            "    echo \"Neither curl nor wget is installed in guest\" >&2",
+            "    exit 1",
+            "  fi",
+            "  tar -xzf \"$tmp_archive\" -C /opt/deskfleet",
+            "  rm -f \"$tmp_archive\"",
+            "  chmod +x \(qDaemon)",
+            "  printf '%s' \(shellQuote(versionName)) >\(shellQuote(versionFile))",
+            "fi",
+            "if [ -x '/opt/deskfleet/node' ] && [ -f '/opt/deskfleet/daemon.cjs' ]; then",
+            "  tmp_wrapper='/opt/deskfleet/.deskfleet-daemon.tmp'",
+            "  cat <<'DESKFLEET_WRAPPER_EOF' >\"$tmp_wrapper\"",
+            wrapperBody,
+            "DESKFLEET_WRAPPER_EOF",
+            "  if ! cmp -s \"$tmp_wrapper\" \(qDaemon) 2>/dev/null; then",
+            "    chmod 0755 \"$tmp_wrapper\"",
+            "    mv \"$tmp_wrapper\" \(qDaemon)",
+            "    if [ -f \(qPid) ]; then",
+            "      old_pid=$(cat \(qPid) 2>/dev/null || true)",
+            "      if [ -n \"$old_pid\" ] && kill -0 \"$old_pid\" 2>/dev/null; then",
+            "        kill \"$old_pid\" 2>/dev/null || true",
+            "        wait_i=0",
+            "        while [ \"$wait_i\" -lt 10 ] && kill -0 \"$old_pid\" 2>/dev/null; do",
+            "          wait_i=$((wait_i + 1))",
+            "          sleep 0.2",
+            "        done",
+            "        if kill -0 \"$old_pid\" 2>/dev/null; then",
+            "          kill -9 \"$old_pid\" 2>/dev/null || true",
+            "        fi",
+            "      fi",
+            "      rm -f \(qPid) \(qDiscovery)",
+            "    fi",
+            "    sync >/dev/null 2>&1 || true",
+            "  else",
+            "    rm -f \"$tmp_wrapper\"",
+            "  fi",
+            "fi",
+            "",
+        ]
+        return lines.joined(separator: "\n")
     }
 
     /// Formats a framed host -> guest exec request sent over UART 1 (/dev/ttyS1):

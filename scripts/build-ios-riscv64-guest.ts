@@ -30,15 +30,14 @@ export function nodeRiscv64DownloadUrl(nodeVersion: string = process.version): s
   return `https://unofficial-builds.nodejs.org/download/release/${normalized}/node-${normalized}-linux-riscv64.tar.xz`
 }
 
+export const RISCV64_NODE_V8_FLAGS =
+  "--no-sparkplug --no-maglev --no-opt --no-regexp-tier-up --liftoff-only --no-wasm-tier-up"
+
 export function buildDaemonWrapperScript(): string {
   return [
     "#!/bin/sh",
     'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
-    'case " ${NODE_OPTIONS:-} " in',
-    '  *" --jitless "*) ;;',
-    '  *) export NODE_OPTIONS="--jitless${NODE_OPTIONS:+ $NODE_OPTIONS}" ;;',
-    "esac",
-    'exec "$DIR/node" --jitless "$DIR/daemon.cjs" "$@"',
+    `exec "$DIR/node" ${RISCV64_NODE_V8_FLAGS} "$DIR/daemon.cjs" "$@"`,
     "",
   ].join("\n")
 }
