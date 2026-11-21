@@ -10,6 +10,7 @@
 @protocol DeskFleetJitHandlerProtocol <NSObject>
 + (void)handleRequestWithContext:(NSExtensionContext *)context
                      pairingPath:(NSString *)pairingPath
+                     pairingData:(NSData * _Nullable)pairingData
                        targetPid:(int32_t)targetPid
                      needsScript:(BOOL)needsScript;
 @end
@@ -31,6 +32,7 @@
 
     if ([action isEqualToString:@"enable_jit"]) {
         NSString *pairingPath = [info[@"pairingPath"] isKindOfClass:[NSString class]] ? info[@"pairingPath"] : @"";
+        NSData *pairingData = [info[@"pairingData"] isKindOfClass:[NSData class]] ? info[@"pairingData"] : nil;
         int32_t targetPid = [info[@"pid"] intValue];
         BOOL needsScript = [info[@"needsScript"] boolValue];
         Class<DeskFleetJitHandlerProtocol> handlerClass =
@@ -41,6 +43,7 @@
         }
         [handlerClass handleRequestWithContext:context
                                    pairingPath:pairingPath
+                                   pairingData:pairingData
                                      targetPid:targetPid
                                    needsScript:needsScript];
         return;

@@ -100,13 +100,19 @@ static NSString *const kDeskFleetJitHelperSuffix = @".jit-helper";
         ((void (*)(id, SEL, id))objc_msgSend)(extension, setInterruptSel, onInterrupt);
     }
 
-    NSExtensionItem *requestItem = [[NSExtensionItem alloc] init];
-    requestItem.userInfo = @{
+    NSData *pairingData = (pairingPath.length > 0) ? [NSData dataWithContentsOfFile:pairingPath] : nil;
+    NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithDictionary:@{
         @"action": @"enable_jit",
-        @"pairingPath": pairingPath,
+        @"pairingPath": pairingPath ?: @"",
         @"pid": @(pid),
         @"needsScript": @(needsScript),
-    };
+    }];
+    if (pairingData.length > 0) {
+        userInfo[@"pairingData"] = pairingData;
+    }
+
+    NSExtensionItem *requestItem = [[NSExtensionItem alloc] init];
+    requestItem.userInfo = userInfo;
 
     SEL beginSel = NSSelectorFromString(@"beginExtensionRequestWithInputItems:completion:");
     if (![extension respondsToSelector:beginSel]) {

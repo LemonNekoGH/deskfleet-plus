@@ -15,6 +15,11 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     private var completed = false
     private let onDevicePairing = RvvmOnDevicePairing()
     private var vpnReachable = false
+    private var isBusy = false
+    private var isPairing = false
+    private let jitStateLock = NSLock()
+    private var activeJitToken: UUID?
+    private var foregroundObserver: NSObjectProtocol?
 
     private let statusLabel = UILabel()
     private let pairingStateLabel = UILabel()
@@ -33,6 +38,12 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+        }
     }
 
     override func viewDidLoad() {
@@ -99,6 +110,15 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
             stack.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
         ])
 
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.probeLocalDevVpn()
+            self?.refreshState()
+        }
+
         refreshState()
         probeLocalDevVpn()
     }
@@ -108,6 +128,13 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         config.title = title
         config.cornerStyle = .medium
         button.configuration = config
+    }
+
+    private func setPairButtonTitle(_ title: String) {
+        var config = pairButton.configuration ?? .tinted()
+        config.title = title
+        config.cornerStyle = .medium
+        pairButton.configuration = config
     }
 
     private enum ButtonStyle {
@@ -127,28 +154,35 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
             : "LocalDevVPN (10.7.0.1:62078): Not detected (required on device)"
         vpnStateLabel.textColor = vpnReachable ? .systemGreen : .secondaryLabel
 
-        activateButton.isEnabled = hasPairing
+        activateButton.isEnabled = !isBusy && hasPairing
     }
 
     private func probeLocalDevVpn() {
+        let queue = DispatchQueue(label: "moe.remon.deskfleet.plus.vpn-probe")
         let connection = NWConnection(host: "10.7.0.1", port: 62078, using: .tcp)
-        connection.stateUpdateHandler = { [weak self] state in
+        var finished = false
+        let finishProbe: (Bool) -> Void = { [weak self] reachable in
+            guard !finished else { return }
+            finished = true
+            connection.cancel()
+            DispatchQueue.main.async {
+                self?.vpnReachable = reachable
+                self?.refreshState()
+            }
+        }
+        connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                connection.cancel()
-                DispatchQueue.main.async {
-                    self?.vpnReachable = true
-                    self?.refreshState()
-                }
+                finishProbe(true)
             case .failed, .cancelled:
-                connection.cancel()
+                finishProbe(false)
             default:
                 break
             }
         }
-        connection.start(queue: DispatchQueue.global(qos: .utility))
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.0) {
-            connection.cancel()
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 2.0) {
+            finishProbe(false)
         }
     }
 
@@ -180,25 +214,56 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     }
 
     @objc private func onDevicePairTapped() {
-        setBusy(true, message: "Waiting for on-device RemotePairing confirmation...")
-        onDevicePairing.start { [weak self] result in
-            guard let self else { return }
-            self.setBusy(false, message: nil)
-            switch result {
-            case .success(let data):
-                do {
-                    let parent = self.pairingFileURL.deletingLastPathComponent()
-                    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-                    try data.write(to: self.pairingFileURL, options: .atomic)
-                    self.statusLabel.text = "On-device pairing succeeded."
-                    self.refreshState()
-                } catch {
-                    self.statusLabel.text = "Failed to store pairing file: \(error.localizedDescription)"
-                }
-            case .failure(let error):
-                self.statusLabel.text = error.localizedDescription
-            }
+        if isPairing {
+            statusLabel.text = "Stopping on-device pairing..."
+            onDevicePairing.cancel()
+            return
         }
+
+        isPairing = true
+        setPairButtonTitle("Stop On-Device Pairing")
+        setBusy(true, message: "Preparing on-device RemotePairing...")
+        onDevicePairing.start(
+            onEvent: { [weak self] event in
+                guard let self, !self.completed, self.isPairing else { return }
+                switch event {
+                case .listening(let hostName, let port):
+                    self.statusLabel.text = "Starting Bonjour service for \"\(hostName)\" (port \(port))..."
+                case .published(let hostName, let port):
+                    self.statusLabel.text = """
+                    Advertising "\(hostName)" (port \(port)).
+                    1. Open iOS Settings → Privacy & Security → Developer Mode.
+                    2. Tap "\(hostName)" to start pairing.
+                    3. Enter the 6-digit PIN from the notification (it will also appear here).
+                    """
+                case .pinReceived(let pin):
+                    self.statusLabel.text = """
+                    Pairing PIN: \(pin)
+                    Enter this 6-digit PIN in Settings → Privacy & Security → Developer Mode.
+                    """
+                }
+            },
+            completion: { [weak self] result in
+                guard let self else { return }
+                self.isPairing = false
+                self.setPairButtonTitle("Pair On-Device (iOS 27+)")
+                self.setBusy(false, message: nil)
+                switch result {
+                case .success(let data):
+                    do {
+                        let parent = self.pairingFileURL.deletingLastPathComponent()
+                        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+                        try data.write(to: self.pairingFileURL, options: .atomic)
+                        self.statusLabel.text = "On-device pairing succeeded. Tap Activate Pure JIT to continue."
+                        self.refreshState()
+                    } catch {
+                        self.statusLabel.text = "Failed to store pairing file: \(error.localizedDescription)"
+                    }
+                case .failure(let error):
+                    self.statusLabel.text = error.localizedDescription
+                }
+            }
+        )
     }
 
     private var isJitReadyForColdStart: Bool {
@@ -206,6 +271,26 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
             return rvvm_host_is_traced()
         }
         return rvvm_host_check_jit_enabled()
+    }
+
+    private func setActiveJitToken(_ token: UUID?) {
+        jitStateLock.lock()
+        activeJitToken = token
+        jitStateLock.unlock()
+    }
+
+    private func isJitTokenActive(_ token: UUID) -> Bool {
+        jitStateLock.lock()
+        defer { jitStateLock.unlock() }
+        return activeJitToken == token
+    }
+
+    private func clearJitTokenIfMatching(_ token: UUID) -> Bool {
+        jitStateLock.lock()
+        defer { jitStateLock.unlock() }
+        guard activeJitToken == token else { return false }
+        activeJitToken = nil
+        return true
     }
 
     @objc private func activateJitTapped() {
@@ -216,47 +301,52 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
 
         let majorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
         let needsScript = majorVersion >= 26
-        setBusy(true, message: "Activating Pure JIT via DeskFleetJITHelper...")
+        let token = UUID()
+        setActiveJitToken(token)
+        setBusy(true, message: "Activating Pure JIT via DeskFleetJITHelper (first run may download Developer Disk Image)...")
 
-        var helperFailure: String?
         RvvmJitHelperLauncher.activateJit(
             withPairingPath: pairingFileURL.path,
             targetPid: getpid(),
             needsScript: needsScript
         ) { [weak self] success, errorMessage in
             DispatchQueue.main.async {
-                guard let self, !self.completed else { return }
+                guard let self, !self.completed, self.isJitTokenActive(token) else { return }
                 if success && self.isJitReadyForColdStart {
+                    _ = self.clearJitTokenIfMatching(token)
                     self.finish(.success(()))
                 } else if !success {
-                    helperFailure = errorMessage ?? "JIT helper failed"
-                    self.setBusy(false, message: helperFailure)
+                    guard self.clearJitTokenIfMatching(token) else { return }
+                    self.setBusy(false, message: errorMessage ?? "JIT helper failed")
                 }
             }
         }
 
         // On iOS 26+, StikJIT's universal script keeps the helper request open until librvvm
         // allocates JIT caches and invokes rvvm_ios_jit_detach(), so poll P_TRACED (or CS_DEBUGGED
-        // on iOS 17.4-18).
-        let deadline = Date().addingTimeInterval(20.0)
+        // on iOS 17.4-18). First run may take 30-90s to download and mount the Developer Disk Image.
+        let deadline = Date().addingTimeInterval(120.0)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             while Date() < deadline {
-                if self?.isJitReadyForColdStart == true {
+                guard let self, self.isJitTokenActive(token) else { return }
+                if self.isJitReadyForColdStart {
                     DispatchQueue.main.async {
-                        self?.finish(.success(()))
+                        guard self.clearJitTokenIfMatching(token), !self.completed else { return }
+                        self.finish(.success(()))
                     }
                     return
                 }
                 Thread.sleep(forTimeInterval: 0.15)
             }
             DispatchQueue.main.async {
-                guard let self, !self.completed else { return }
-                self.setBusy(false, message: helperFailure ?? "Timed out waiting for JIT activation. Verify LocalDevVPN and pairing file.")
+                guard let self, self.clearJitTokenIfMatching(token), !self.completed else { return }
+                self.setBusy(false, message: "Timed out waiting for JIT activation. Verify LocalDevVPN and pairing file.")
             }
         }
     }
 
     @objc private func cancelTapped() {
+        setActiveJitToken(nil)
         onDevicePairing.cancel()
         finish(.failure(NSError(
             domain: "RvvmJitSetupViewController",
@@ -266,8 +356,9 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     }
 
     private func setBusy(_ busy: Bool, message: String?) {
+        isBusy = busy
         importButton.isEnabled = !busy
-        pairButton.isEnabled = !busy
+        pairButton.isEnabled = !busy || isPairing
         activateButton.isEnabled = !busy && FileManager.default.fileExists(atPath: pairingFileURL.path)
         if busy {
             activityIndicator.startAnimating()
@@ -282,6 +373,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     private func finish(_ result: Result<Void, Error>) {
         guard !completed else { return }
         completed = true
+        setActiveJitToken(nil)
         dismiss(animated: true) { [onComplete] in
             onComplete(result)
         }
