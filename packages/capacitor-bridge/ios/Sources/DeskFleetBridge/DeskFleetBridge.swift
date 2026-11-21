@@ -96,7 +96,13 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
             ? UIDevice.current.name
             : DispatchQueue.main.sync { UIDevice.current.name }
         let fallbackName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "iOS" : deviceName
-        let manager = RvvmDaemonManager(versionName: versionName, fallbackMachineName: fallbackName)
+        let manager = RvvmDaemonManager(
+            versionName: versionName,
+            fallbackMachineName: fallbackName,
+            onLog: { [weak self] chunk in
+                self?.notifyListeners("localDaemonLog", data: ["chunk": chunk])
+            }
+        )
         rvvmDaemon = manager
         return manager
     }

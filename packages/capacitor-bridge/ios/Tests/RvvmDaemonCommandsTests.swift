@@ -86,4 +86,54 @@ final class RvvmDaemonCommandsTests: XCTestCase {
         XCTAssertTrue(cloudInit.contains("/dev/ttyS1"))
         XCTAssertTrue(cloudInit.contains("deskfleet-exec-agent.service"))
     }
+
+    func testEnsureDaemonRunningCommandClosesExecChannelAndCreatesDiscoveryDir() {
+        let cmd = RvvmDaemonCommands.ensureDaemonRunningCommand()
+        XCTAssertTrue(cmd.contains("/root/.deskfleet"))
+        XCTAssertTrue(cmd.contains("export HOME=/root"))
+        XCTAssertTrue(cmd.contains("3>&-"))
+        XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonPidFile))
+        XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonLogFile))
+    }
+
+    func testProvisionScriptSkipsRedownloadOnDevVersionWhileKeepingAssetUrl() {
+        let script = RvvmDaemonCommands.provisionDaemonCommand(
+            releaseUrl: "https://example.invalid/deskfleet-linux-riscv64.tar.gz",
+            versionName: "1.0"
+        )
+        XCTAssertTrue(script.contains("deskfleet-linux-riscv64.tar.gz"))
+        XCTAssertTrue(script.contains("exit 0"))
+    }
+
+    func testDaemonProbeCommandAndOutputParsing() {
+        let cmd = RvvmDaemonCommands.daemonProbeCommand(logOffset: 128)
+        XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonDiscoveryPath))
+        XCTAssertTrue(cmd.contains("tail -c +$((128 + 1))"))
+
+        let waiting = RvvmDaemonCommands.parseDaemonProbeOutput("STATE alive waiting 64\nbooting...\n")
+        XCTAssertEqual(waiting?.alive, true)
+        XCTAssertEqual(waiting?.discoveryReady, false)
+        XCTAssertEqual(waiting?.nextOffset, 64)
+        XCTAssertEqual(waiting?.logChunk, "booting...\n")
+
+        let ready = RvvmDaemonCommands.parseDaemonProbeOutput("STATE alive ready 128\n{\"event\":\"ready\"}\nnext\n")
+        XCTAssertEqual(ready?.alive, true)
+        XCTAssertEqual(ready?.discoveryReady, true)
+        XCTAssertEqual(ready?.nextOffset, 128)
+        XCTAssertEqual(ready?.logChunk, "{\"event\":\"ready\"}\nnext\n")
+
+        let dead = RvvmDaemonCommands.parseDaemonProbeOutput("STATE dead waiting 0\n")
+        XCTAssertEqual(dead?.alive, false)
+        XCTAssertEqual(dead?.discoveryReady, false)
+        XCTAssertEqual(dead?.nextOffset, 0)
+        XCTAssertEqual(dead?.logChunk, "")
+
+        XCTAssertNil(RvvmDaemonCommands.parseDaemonProbeOutput("garbage output"))
+    }
+
+    func testFormatByteCountFormatsUnitsConsistently() {
+        XCTAssertEqual(RvvmDaemonCommands.formatByteCount(512), "512 B")
+        XCTAssertEqual(RvvmDaemonCommands.formatByteCount(1536), "1.5 KiB")
+        XCTAssertEqual(RvvmDaemonCommands.formatByteCount(342 * 1024 * 1024), "342.0 MiB")
+    }
 }

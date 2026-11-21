@@ -14,6 +14,7 @@ internal final class RvvmDaemonManager {
 
     private let versionName: String
     private let fallbackMachineName: String
+    private let onLog: (String) -> Void
     private let keepAlive = RvvmBackgroundKeepAlive()
     private let stateLock = NSLock()
     private let execLock = NSLock()
@@ -23,13 +24,40 @@ internal final class RvvmDaemonManager {
     private var rxBuffer = Data()
     private var guestReady = false
 
-    init(versionName: String, fallbackMachineName: String) {
+    init(
+        versionName: String,
+        fallbackMachineName: String,
+        onLog: @escaping (String) -> Void = { _ in }
+    ) {
         self.versionName = versionName
         self.fallbackMachineName = fallbackMachineName
+        self.onLog = onLog
     }
 
     deinit {
         stopVM()
+    }
+
+    // MARK: - Logging helpers
+
+    private func emitStep(_ text: String) {
+        onLog("\u{1B}[1;36m==> \(text)\u{1B}[0m\n")
+    }
+
+    private func emitInfo(_ text: String) {
+        onLog("  \(text)\n")
+    }
+
+    private func emitSuccess(_ text: String) {
+        onLog("\u{1B}[1;32m✓ \(text)\u{1B}[0m\n")
+    }
+
+    private func emitWarning(_ text: String) {
+        onLog("\u{1B}[33m! \(text)\u{1B}[0m\n")
+    }
+
+    private func emitError(_ text: String) {
+        onLog("\u{1B}[1;31m✗ \(text)\u{1B}[0m\n")
     }
 
     // MARK: - LocalDaemonBridgePlugin operations
@@ -62,8 +90,10 @@ internal final class RvvmDaemonManager {
         presenterProvider: @escaping () -> UIViewController?
     ) throws -> [String: Any] {
         try ensureRunningAndProvisioned(presenterProvider: presenterProvider)
+        emitStep("Preparing machine identity for \(serverUrl)...")
         let cmd = RvvmDaemonCommands.prepareEnrollmentCommand(serverUrl: serverUrl, teamId: teamId)
         let output = try execInGuest(cmd, timeoutSeconds: 60)
+        emitSuccess("Machine identity prepared.")
         return try RvvmDaemonCommands.extractJsonObject(from: output)
     }
 
@@ -73,9 +103,11 @@ internal final class RvvmDaemonManager {
         presenterProvider: @escaping () -> UIViewController?
     ) throws -> [String: Any] {
         try ensureRunningAndProvisioned(presenterProvider: presenterProvider)
+        emitStep("Saving machine credentials into local daemon...")
         let cmd = RvvmDaemonCommands.enrollCommand(serverUrl: serverUrl, credentialsJson: credentialsJson)
         let output = try execInGuest(cmd, timeoutSeconds: 60)
         let enrolled = try RvvmDaemonCommands.extractJsonObject(from: output)
+        emitSuccess("Local daemon enrolled.")
         _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(), timeoutSeconds: 20)
         return enrolled
     }
@@ -124,7 +156,11 @@ internal final class RvvmDaemonManager {
         stateLock.lock()
         let alreadyRunning = (vmHandle != nil && rvvm_host_is_running(vmHandle))
         stateLock.unlock()
-        if alreadyRunning || isJitReadyForColdStart() {
+        if alreadyRunning {
+            return
+        }
+        if isJitReadyForColdStart() {
+            emitSuccess("Pure JIT is already active.")
             return
         }
 
@@ -134,6 +170,7 @@ internal final class RvvmDaemonManager {
 
         // Try silent activation first if a pairing file already exists.
         if FileManager.default.fileExists(atPath: pairingURL.path) {
+            emitStep("Activating Pure JIT for embedded Linux VM...")
             RvvmJitHelperLauncher.activateJit(
                 withPairingPath: pairingURL.path,
                 targetPid: getpid(),
@@ -143,12 +180,14 @@ internal final class RvvmDaemonManager {
             let quickDeadline = Date().addingTimeInterval(6.0)
             while Date() < quickDeadline {
                 if isJitReadyForColdStart() {
+                    emitSuccess("Pure JIT activated.")
                     return
                 }
                 Thread.sleep(forTimeInterval: 0.15)
             }
         }
 
+        emitStep("Waiting for JIT activation...")
         let semaphore = DispatchSemaphore(value: 0)
         var setupResult: Result<Void, Error> = .failure(NSError(
             domain: "RvvmDaemonManager",
@@ -178,19 +217,22 @@ internal final class RvvmDaemonManager {
         try setupResult.get()
 
         guard isJitReadyForColdStart() else {
+            let msg = "Pure JIT is required to run the embedded Linux daemon"
+            emitError(msg)
             throw NSError(
                 domain: "RvvmDaemonManager",
                 code: 11,
-                userInfo: [NSLocalizedDescriptionKey: "Pure JIT is required to run the embedded Linux daemon"]
+                userInfo: [NSLocalizedDescriptionKey: msg]
             )
         }
+        emitSuccess("Pure JIT activated.")
     }
 
     private func ensureVMBooted() throws {
         stateLock.lock()
         if let vmHandle, rvvm_host_is_running(vmHandle) {
             stateLock.unlock()
-            try waitForGuestExecAgent(timeoutSeconds: 90)
+            try waitForGuestExecAgent(timeoutSeconds: 90, consoleLogURL: nil, initialConsoleOffset: 0)
             return
         }
         stateLock.unlock()
@@ -200,8 +242,10 @@ internal final class RvvmDaemonManager {
         let kernelURL = resolveOptionalGuestKernelURL()
         let seedDiskURL = resolveOptionalSeedDiskURL()
         let consoleLogURL = vmDirectoryURL().appendingPathComponent("console.log")
+        let initialConsoleOffset = fileSize(consoleLogURL)
 
         keepAlive.start()
+        emitStep("Booting embedded RISC-V 64-bit Linux VM (librvvm + RVJIT)...")
 
         let cmdline = RvvmDaemonCommands.guestBootCmdline()
         var errorBuffer = [CChar](repeating: 0, count: 512)
@@ -235,10 +279,12 @@ internal final class RvvmDaemonManager {
         guard let startedHandle else {
             keepAlive.stop()
             let errText = String(cString: errorBuffer)
+            let msg = "Failed to start librvvm guest: \(errText)"
+            emitError(msg)
             throw NSError(
                 domain: "RvvmDaemonManager",
                 code: 12,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to start librvvm guest: \(errText)"]
+                userInfo: [NSLocalizedDescriptionKey: msg]
             )
         }
 
@@ -248,7 +294,11 @@ internal final class RvvmDaemonManager {
         rxBuffer.removeAll(keepingCapacity: false)
         stateLock.unlock()
 
-        try waitForGuestExecAgent(timeoutSeconds: 90)
+        try waitForGuestExecAgent(
+            timeoutSeconds: 90,
+            consoleLogURL: consoleLogURL,
+            initialConsoleOffset: initialConsoleOffset
+        )
     }
 
     private func guestReleaseBaseURL() -> String {
@@ -262,16 +312,130 @@ internal final class RvvmDaemonManager {
         return Self.defaultForkReleaseBase
     }
 
+    private func isGuestDaemonReady() -> Bool {
+        do {
+            let output = try execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 15)
+            let parsed = try RvvmDaemonCommands.extractJsonObject(from: output)
+            return parsed["registrations"] != nil
+        } catch {
+            return false
+        }
+    }
+
     private func ensureGuestDaemonProvisioned() throws {
+        emitStep("Checking /opt/deskfleet/deskfleet-daemon inside guest...")
         let releaseUrl = "\(guestReleaseBaseURL())/\(RvvmDaemonCommands.daemonReleaseAsset)"
         let script = RvvmDaemonCommands.provisionDaemonCommand(releaseUrl: releaseUrl, versionName: versionName)
         _ = try execInGuest(script, timeoutSeconds: 180)
+
+        if isGuestDaemonReady() {
+            emitSuccess("Local deskfleet-daemon is already running.")
+            return
+        }
+
+        let logSizeRaw = (try? execInGuest(RvvmDaemonCommands.daemonLogSizeCommand(), timeoutSeconds: 10)) ?? "0"
+        let initialOffset = UInt64(logSizeRaw.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+
+        emitStep("Starting local deskfleet-daemon service...")
         _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(), timeoutSeconds: 20)
+        try waitForGuestDaemonReady(initialLogOffset: initialOffset, timeoutSeconds: 60)
+    }
+
+    private func waitForGuestDaemonReady(initialLogOffset: UInt64, timeoutSeconds: TimeInterval) throws {
+        var logOffset = initialLogOffset
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if let probeOut = try? execInGuest(RvvmDaemonCommands.daemonProbeCommand(logOffset: logOffset), timeoutSeconds: 10),
+               let probe = RvvmDaemonCommands.parseDaemonProbeOutput(probeOut) {
+                if !probe.logChunk.isEmpty {
+                    onLog(probe.logChunk)
+                }
+                logOffset = probe.nextOffset
+
+                if !probe.alive {
+                    let tail = ((try? execInGuest(RvvmDaemonCommands.daemonLogTailCommand(), timeoutSeconds: 10)) ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let msg = tail.isEmpty
+                        ? "Local deskfleet-daemon exited before becoming ready."
+                        : "Local deskfleet-daemon exited unexpectedly:\n\(tail)"
+                    emitError(msg)
+                    throw NSError(
+                        domain: "RvvmDaemonManager",
+                        code: 25,
+                        userInfo: [NSLocalizedDescriptionKey: msg]
+                    )
+                }
+
+                if probe.discoveryReady && isGuestDaemonReady() {
+                    emitSuccess("Local deskfleet-daemon is ready.")
+                    return
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        let tail = ((try? execInGuest(RvvmDaemonCommands.daemonLogTailCommand(), timeoutSeconds: 10)) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let msg = tail.isEmpty
+            ? "Timed out waiting for local deskfleet-daemon to become ready."
+            : "Timed out waiting for local deskfleet-daemon to become ready:\n\(tail)"
+        emitError(msg)
+        throw NSError(
+            domain: "RvvmDaemonManager",
+            code: 26,
+            userInfo: [NSLocalizedDescriptionKey: msg]
+        )
     }
 
     // MARK: - Framed UART 1 exec protocol
 
-    private func waitForGuestExecAgent(timeoutSeconds: TimeInterval) throws {
+    private func fileSize(_ url: URL) -> UInt64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber else {
+            return 0
+        }
+        return size.uint64Value
+    }
+
+    private func drainFileLog(url: URL?, offset: UInt64, flushPartial: Bool = false) -> UInt64 {
+        guard let url, let handle = try? FileHandle(forReadingFrom: url) else {
+            return offset
+        }
+        defer { try? handle.close() }
+        guard let endOffset = try? handle.seekToEnd(), endOffset > offset else {
+            return offset
+        }
+        do {
+            try handle.seek(toOffset: offset)
+            let chunkSize = Int(min(endOffset - offset, 64 * 1024))
+            guard chunkSize > 0 else { return offset }
+            let data = handle.readData(ofLength: chunkSize)
+            guard !data.isEmpty else { return offset }
+
+            let emitData: Data
+            if !flushPartial, let lastNewline = data.lastIndex(of: 0x0A) {
+                emitData = data.subdata(in: 0..<(lastNewline + 1))
+            } else if flushPartial {
+                emitData = data
+            } else {
+                return offset
+            }
+
+            let text = String(decoding: emitData, as: UTF8.self)
+            if !text.isEmpty {
+                onLog(text)
+            }
+            return offset + UInt64(emitData.count)
+        } catch {
+            return offset
+        }
+    }
+
+    private func waitForGuestExecAgent(
+        timeoutSeconds: TimeInterval,
+        consoleLogURL: URL?,
+        initialConsoleOffset: UInt64
+    ) throws {
         stateLock.lock()
         if guestReady {
             stateLock.unlock()
@@ -279,27 +443,36 @@ internal final class RvvmDaemonManager {
         }
         stateLock.unlock()
 
+        var consoleOffset = initialConsoleOffset
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         var lastError: Error?
         while Date() < deadline {
+            consoleOffset = drainFileLog(url: consoleLogURL, offset: consoleOffset)
             do {
                 let pong = try execInGuest("printf 'ready\\n'\n", timeoutSeconds: 3)
+                consoleOffset = drainFileLog(url: consoleLogURL, offset: consoleOffset)
                 if pong.trimmingCharacters(in: .whitespacesAndNewlines) == "ready" {
+                    _ = drainFileLog(url: consoleLogURL, offset: consoleOffset, flushPartial: true)
                     stateLock.lock()
                     guestReady = true
                     stateLock.unlock()
+                    emitSuccess("Linux guest is ready.")
                     return
                 }
             } catch {
                 lastError = error
+                consoleOffset = drainFileLog(url: consoleLogURL, offset: consoleOffset)
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        throw lastError ?? NSError(
+        _ = drainFileLog(url: consoleLogURL, offset: consoleOffset, flushPartial: true)
+        let err = lastError ?? NSError(
             domain: "RvvmDaemonManager",
             code: 13,
             userInfo: [NSLocalizedDescriptionKey: "Timed out waiting for Linux guest exec agent on /dev/ttyS1"]
         )
+        emitError(err.localizedDescription)
+        throw err
     }
 
     private func execInGuest(_ command: String, timeoutSeconds: TimeInterval) throws -> String {
@@ -475,6 +648,7 @@ internal final class RvvmDaemonManager {
         for name in candidates {
             let path = vmDirectoryURL().appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: path.path) {
+                emitSuccess("Using cached Linux guest image (\(name)).")
                 return path
             }
         }
@@ -484,6 +658,7 @@ internal final class RvvmDaemonManager {
     private func downloadPrebakedGuestDiskImage() throws -> URL {
         let targetURL = vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img")
         let partURL = vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img.part")
+        let stagingGz = vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img.gz.download")
         let downloadURLString = "\(guestReleaseBaseURL())/\(RvvmDaemonCommands.guestDiskArchiveAsset)"
         guard let remoteURL = URL(string: downloadURLString) else {
             throw NSError(
@@ -493,75 +668,101 @@ internal final class RvvmDaemonManager {
             )
         }
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var downloadedTempURL: URL?
-        var downloadError: Error?
+        keepAlive.start()
+        var handedOffToVM = false
+        defer {
+            if !handedOffToVM {
+                keepAlive.stop()
+            }
+        }
 
-        let task = URLSession.shared.downloadTask(with: remoteURL) { location, response, error in
-            defer { semaphore.signal() }
-            if let error {
-                downloadError = error
-                return
+        emitStep("Downloading Linux guest image (\(RvvmDaemonCommands.guestDiskArchiveAsset))...")
+        let delegate = RvvmAssetDownloadDelegate(stagingURL: stagingGz) { [onLog] downloaded, total in
+            let line: String
+            if total > 0 {
+                let pct = min(max((downloaded * 100) / total, 0), 100)
+                line = "Downloaded \(RvvmDaemonCommands.formatByteCount(downloaded)) / \(RvvmDaemonCommands.formatByteCount(total)) (\(pct)%)"
+            } else {
+                line = "Downloaded \(RvvmDaemonCommands.formatByteCount(downloaded))"
             }
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                downloadError = NSError(
-                    domain: "RvvmDaemonManager",
-                    code: http.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to download \(RvvmDaemonCommands.guestDiskArchiveAsset): HTTP \(http.statusCode)"]
-                )
-                return
-            }
-            guard let location else {
-                downloadError = NSError(
-                    domain: "RvvmDaemonManager",
-                    code: 22,
-                    userInfo: [NSLocalizedDescriptionKey: "Empty download location for \(RvvmDaemonCommands.guestDiskArchiveAsset)"]
-                )
-                return
-            }
-            let stagingGz = self.vmDirectoryURL().appendingPathComponent("deskfleet-riscv64.img.gz.download")
-            try? FileManager.default.removeItem(at: stagingGz)
-            do {
-                try FileManager.default.moveItem(at: location, to: stagingGz)
-                downloadedTempURL = stagingGz
-            } catch {
-                downloadError = error
-            }
+            onLog("\r\u{1B}[2K  \(line)")
         }
-        task.resume()
-        semaphore.wait()
 
-        if let downloadError {
-            throw downloadError
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let gzURL: URL
+        var emittedDownloadProgress = false
+        do {
+            defer { session.finishTasksAndInvalidate() }
+            let task = session.downloadTask(with: remoteURL)
+            task.resume()
+            let outcome = try delegate.waitForResult()
+            gzURL = outcome.url
+            emittedDownloadProgress = outcome.emittedProgress
+            if emittedDownloadProgress {
+                onLog("\n")
+            }
+        } catch {
+            if delegate.didEmitProgress() && !emittedDownloadProgress {
+                onLog("\n")
+            }
+            emitError(error.localizedDescription)
+            throw error
         }
-        guard let gzURL = downloadedTempURL else {
-            throw NSError(
-                domain: "RvvmDaemonManager",
-                code: 23,
-                userInfo: [NSLocalizedDescriptionKey: "Unable to stage downloaded guest disk image"]
-            )
-        }
+
         defer { try? FileManager.default.removeItem(at: gzURL) }
         try? FileManager.default.removeItem(at: partURL)
 
-        var errBuf = [CChar](repeating: 0, count: 512)
-        let ok = gzURL.path.withCString { srcCStr in
-            partURL.path.withCString { dstCStr in
-                rvvm_host_gunzip_file(srcCStr, dstCStr, &errBuf, errBuf.count)
+        emitStep("Decompressing guest disk image (\(RvvmDaemonCommands.guestDiskArchiveAsset))...")
+        final class GunzipProgressBox {
+            let onLog: (String) -> Void
+            var sawProgress = false
+            init(onLog: @escaping (String) -> Void) {
+                self.onLog = onLog
             }
+        }
+        let progressBox = GunzipProgressBox(onLog: onLog)
+        let gunzipCallback: rvvm_host_progress_cb_t = { doneBytes, totalBytes, ctx in
+            guard let ctx else { return }
+            let box = Unmanaged<GunzipProgressBox>.fromOpaque(ctx).takeUnretainedValue()
+            box.sawProgress = true
+            let line: String
+            if totalBytes > 0 {
+                let pct = min((doneBytes * 100) / totalBytes, 100)
+                line = "Decompressed \(RvvmDaemonCommands.formatByteCount(Int64(doneBytes))) / \(RvvmDaemonCommands.formatByteCount(Int64(totalBytes))) (\(pct)%)"
+            } else {
+                line = "Decompressed \(RvvmDaemonCommands.formatByteCount(Int64(doneBytes)))"
+            }
+            box.onLog("\r\u{1B}[2K  \(line)")
+        }
+
+        var errBuf = [CChar](repeating: 0, count: 512)
+        let ok = withExtendedLifetime(progressBox) {
+            let rawCtx = Unmanaged.passUnretained(progressBox).toOpaque()
+            return gzURL.path.withCString { srcCStr in
+                partURL.path.withCString { dstCStr in
+                    rvvm_host_gunzip_file_with_progress(srcCStr, dstCStr, gunzipCallback, rawCtx, &errBuf, errBuf.count)
+                }
+            }
+        }
+        if progressBox.sawProgress {
+            onLog("\n")
         }
         guard ok else {
             try? FileManager.default.removeItem(at: partURL)
             let errText = String(cString: errBuf)
+            let msg = "Failed to decompress guest disk image: \(errText)"
+            emitError(msg)
             throw NSError(
                 domain: "RvvmDaemonManager",
                 code: 24,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to decompress guest disk image: \(errText)"]
+                userInfo: [NSLocalizedDescriptionKey: msg]
             )
         }
 
         try? FileManager.default.removeItem(at: targetURL)
         try FileManager.default.moveItem(at: partURL, to: targetURL)
+        handedOffToVM = true
+        emitSuccess("Guest disk image ready.")
         return targetURL
     }
 
@@ -570,5 +771,129 @@ internal final class RvvmDaemonManager {
             return string.withCString { body($0) }
         }
         return body(nil)
+    }
+}
+
+private final class RvvmAssetDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    private let stagingURL: URL
+    private let onProgress: (Int64, Int64) -> Void
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var lastEmitTime: TimeInterval = 0
+    private var lastEmitBytes: Int64 = -1
+    private var sawProgress = false
+    private var result: Result<URL, Error>?
+
+    init(stagingURL: URL, onProgress: @escaping (Int64, Int64) -> Void) {
+        self.stagingURL = stagingURL
+        self.onProgress = onProgress
+    }
+
+    func didEmitProgress() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return sawProgress
+    }
+
+    func waitForResult() throws -> (url: URL, emittedProgress: Bool) {
+        semaphore.wait()
+        lock.lock()
+        let current = result
+        let emitted = sawProgress
+        lock.unlock()
+        switch current {
+        case .success(let url):
+            return (url, emitted)
+        case .failure(let error):
+            throw error
+        case .none:
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 23,
+                userInfo: [NSLocalizedDescriptionKey: "Unable to stage downloaded guest disk image"]
+            )
+        }
+    }
+
+    private func complete(with outcome: Result<URL, Error>) {
+        lock.lock()
+        guard result == nil else {
+            lock.unlock()
+            return
+        }
+        result = outcome
+        lock.unlock()
+        semaphore.signal()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let shouldEmit: Bool
+        lock.lock()
+        if lastEmitBytes < 0
+            || totalBytesWritten - lastEmitBytes >= 256 * 1024
+            || now - lastEmitTime >= 0.25
+            || (totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite) {
+            lastEmitBytes = totalBytesWritten
+            lastEmitTime = now
+            sawProgress = true
+            shouldEmit = true
+        } else {
+            shouldEmit = false
+        }
+        lock.unlock()
+        if shouldEmit {
+            onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            complete(with: .failure(NSError(
+                domain: "RvvmDaemonManager",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to download \(RvvmDaemonCommands.guestDiskArchiveAsset): HTTP \(http.statusCode)"]
+            )))
+            return
+        }
+        try? FileManager.default.removeItem(at: stagingURL)
+        do {
+            try FileManager.default.moveItem(at: location, to: stagingURL)
+            complete(with: .success(stagingURL))
+        } catch {
+            complete(with: .failure(error))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error {
+            complete(with: .failure(error))
+        } else if let http = task.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            complete(with: .failure(NSError(
+                domain: "RvvmDaemonManager",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to download \(RvvmDaemonCommands.guestDiskArchiveAsset): HTTP \(http.statusCode)"]
+            )))
+        } else {
+            complete(with: .failure(NSError(
+                domain: "RvvmDaemonManager",
+                code: 22,
+                userInfo: [NSLocalizedDescriptionKey: "Empty download location for \(RvvmDaemonCommands.guestDiskArchiveAsset)"]
+            )))
+        }
     }
 }

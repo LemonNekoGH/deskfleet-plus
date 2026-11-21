@@ -50,6 +50,19 @@ int64_t rvvm_host_channel_read(rvvm_host_vm_t* vm, uint8_t* buf, size_t max_len,
 /// Stops and frees the virtual machine and its attached devices.
 void rvvm_host_stop(rvvm_host_vm_t* vm);
 
+typedef void (*rvvm_host_progress_cb_t)(uint64_t done_bytes, uint64_t total_bytes, void* ctx);
+
+/// Streams a gzip-compressed disk image into a sparse raw file on disk using zlib,
+/// invoking optional progress_cb as compressed input bytes are consumed.
+bool rvvm_host_gunzip_file_with_progress(
+    const char*             src_gz_path,
+    const char*             dst_raw_path,
+    rvvm_host_progress_cb_t progress_cb,
+    void*                   progress_ctx,
+    char*                   error_buf,
+    size_t                  error_buf_len
+);
+
 /// Streams a gzip-compressed disk image into a sparse raw file on disk using zlib.
 bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len);
 

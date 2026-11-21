@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -518,10 +519,23 @@ static bool buffer_is_all_zero(const uint8_t* buf, size_t len) {
     return true;
 }
 
-bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len) {
+bool rvvm_host_gunzip_file_with_progress(
+    const char*             src_gz_path,
+    const char*             dst_raw_path,
+    rvvm_host_progress_cb_t progress_cb,
+    void*                   progress_ctx,
+    char*                   error_buf,
+    size_t                  error_buf_len
+) {
     if (!src_gz_path || !dst_raw_path) {
         set_error(error_buf, error_buf_len, "Invalid gunzip file paths");
         return false;
+    }
+
+    struct stat src_stat;
+    uint64_t    compressed_total = 0;
+    if (stat(src_gz_path, &src_stat) == 0 && src_stat.st_size > 0) {
+        compressed_total = (uint64_t)src_stat.st_size;
     }
 
     gzFile gz = gzopen(src_gz_path, "rb");
@@ -547,8 +561,10 @@ bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, ch
         return false;
     }
 
-    off_t total_written = 0;
-    bool  ok            = true;
+    off_t    total_written  = 0;
+    uint64_t last_reported  = 0;
+    uint64_t final_done     = 0;
+    bool     ok             = true;
     while (true) {
         int n = gzread(gz, buf, (unsigned int)chunk_size);
         if (n < 0) {
@@ -584,6 +600,27 @@ bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, ch
             }
         }
         total_written += (off_t)n;
+        if (progress_cb) {
+            z_off_t  gz_pos = gzoffset(gz);
+            uint64_t done   = gz_pos > 0 ? (uint64_t)gz_pos : 0;
+            if (done > final_done) {
+                final_done = done;
+            }
+            if (done - last_reported >= (2ULL << 20)) {
+                last_reported = done;
+                progress_cb(done, compressed_total, progress_ctx);
+            }
+        }
+    }
+
+    if (ok && progress_cb) {
+        z_off_t gz_pos = gzoffset(gz);
+        if (gz_pos > 0 && (uint64_t)gz_pos > final_done) {
+            final_done = (uint64_t)gz_pos;
+        }
+        if (compressed_total > 0) {
+            final_done = compressed_total;
+        }
     }
 
     if (ok && ftruncate(out_fd, total_written) != 0) {
@@ -598,5 +635,12 @@ bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, ch
         set_error(error_buf, error_buf_len, "gzip stream integrity check failed");
         ok = false;
     }
+    if (ok && progress_cb) {
+        progress_cb(final_done, compressed_total, progress_ctx);
+    }
     return ok;
+}
+
+bool rvvm_host_gunzip_file(const char* src_gz_path, const char* dst_raw_path, char* error_buf, size_t error_buf_len) {
+    return rvvm_host_gunzip_file_with_progress(src_gz_path, dst_raw_path, NULL, NULL, error_buf, error_buf_len);
 }

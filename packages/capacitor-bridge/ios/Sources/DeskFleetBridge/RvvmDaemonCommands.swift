@@ -7,6 +7,7 @@ internal enum RvvmDaemonCommands {
     static let daemonBinaryPath = "/opt/deskfleet/deskfleet-daemon"
     static let daemonPidFile = "/run/deskfleet-daemon.pid"
     static let daemonLogFile = "/var/log/deskfleet-daemon.log"
+    static let daemonDiscoveryPath = "/root/.deskfleet/daemon.json"
     static let daemonReleaseAsset = "deskfleet-linux-riscv64.tar.gz"
     static let guestDiskArchiveAsset = "deskfleet-riscv64.img.gz"
 
@@ -53,13 +54,92 @@ internal enum RvvmDaemonCommands {
 
     static func ensureDaemonRunningCommand() -> String {
         """
-        mkdir -p /run /var/log /opt/deskfleet
+        mkdir -p /run /var/log /opt/deskfleet /root/.deskfleet
+        export HOME=/root
         if [ -f \(shellQuote(daemonPidFile)) ] && kill -0 "$(cat \(shellQuote(daemonPidFile)))" 2>/dev/null; then
           exit 0
         fi
-        nohup \(shellQuote(daemonBinaryPath)) </dev/null >>\(shellQuote(daemonLogFile)) 2>&1 &
+        nohup \(shellQuote(daemonBinaryPath)) </dev/null >>\(shellQuote(daemonLogFile)) 2>&1 3>&- &
         echo $! >\(shellQuote(daemonPidFile))
         """
+    }
+
+    static func daemonLogSizeCommand() -> String {
+        let qLog = shellQuote(daemonLogFile)
+        return "if [ -f \(qLog) ]; then wc -c <\(qLog) | tr -d ' '; else echo 0; fi"
+    }
+
+    static func daemonProbeCommand(logOffset: UInt64) -> String {
+        let qPid = shellQuote(daemonPidFile)
+        let qDiscovery = shellQuote(daemonDiscoveryPath)
+        let qLog = shellQuote(daemonLogFile)
+        return """
+        alive=dead
+        if [ -f \(qPid) ]; then
+          pid=$(cat \(qPid) 2>/dev/null || true)
+          if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            alive=alive
+          fi
+        fi
+        ready=waiting
+        if [ -s \(qDiscovery) ]; then
+          ready=ready
+        fi
+        size=0
+        if [ -f \(qLog) ]; then
+          size=$(wc -c <\(qLog) 2>/dev/null | tr -d ' ' || echo 0)
+          case "$size" in ''|*[!0-9]*) size=0 ;; esac
+        fi
+        printf 'STATE %s %s %s\\n' "$alive" "$ready" "$size"
+        if [ "$size" -gt \(logOffset) ] 2>/dev/null && [ -f \(qLog) ]; then
+          tail -c +$((\(logOffset) + 1)) \(qLog) 2>/dev/null || true
+        fi
+        """
+    }
+
+    static func parseDaemonProbeOutput(
+        _ output: String
+    ) -> (alive: Bool, discoveryReady: Bool, nextOffset: UInt64, logChunk: String)? {
+        let firstLine: String
+        let rest: String
+        if let newlineIdx = output.firstIndex(of: "\n") {
+            firstLine = String(output[..<newlineIdx])
+            rest = String(output[output.index(after: newlineIdx)...])
+        } else {
+            firstLine = output
+            rest = ""
+        }
+        let parts = firstLine
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count == 4,
+              parts[0] == "STATE",
+              parts[1] == "alive" || parts[1] == "dead",
+              parts[2] == "ready" || parts[2] == "waiting",
+              let nextOffset = UInt64(parts[3]) else {
+            return nil
+        }
+        return (
+            alive: parts[1] == "alive",
+            discoveryReady: parts[2] == "ready",
+            nextOffset: nextOffset,
+            logChunk: rest
+        )
+    }
+
+    static func daemonLogTailCommand(lines: Int = 40) -> String {
+        "tail -n \(max(lines, 1)) \(shellQuote(daemonLogFile)) 2>/dev/null || true"
+    }
+
+    static func formatByteCount(_ bytes: Int64) -> String {
+        if bytes < 1024 {
+            return "\(bytes) B"
+        }
+        let kib = Double(bytes) / 1024.0
+        if kib < 1024.0 {
+            return String(format: "%.1f KiB", kib)
+        }
+        return String(format: "%.1f MiB", kib / 1024.0)
     }
 
     /// Ensures /opt/deskfleet/deskfleet-daemon (riscv64) exists inside the Linux guest.
@@ -67,13 +147,19 @@ internal enum RvvmDaemonCommands {
     /// downloading deskfleet-linux-riscv64.tar.gz if missing.
     static func provisionDaemonCommand(releaseUrl: String, versionName: String) -> String {
         let versionFile = "/opt/deskfleet/.version"
+        let skipVersionMismatch = versionName == "1.0" || versionName == "0.0.0"
+        let versionCheck = skipVersionMismatch
+            ? "  exit 0"
+            : """
+                if [ ! -f \(shellQuote(versionFile)) ] || [ "$(cat \(shellQuote(versionFile)))" = \(shellQuote(versionName)) ]; then
+                  exit 0
+                fi
+              """
         return """
         set -eu
-        mkdir -p /opt/deskfleet /var/lib/deskfleet /var/log /run
+        mkdir -p /opt/deskfleet /var/lib/deskfleet /var/log /run /root/.deskfleet
         if [ -x \(shellQuote(daemonBinaryPath)) ]; then
-          if [ ! -f \(shellQuote(versionFile)) ] || [ "$(cat \(shellQuote(versionFile)))" = \(shellQuote(versionName)) ]; then
-            exit 0
-          fi
+        \(versionCheck)
         fi
         tmp_archive="/tmp/deskfleet-daemon-riscv64.tar.gz"
         if command -v curl >/dev/null 2>&1; then
