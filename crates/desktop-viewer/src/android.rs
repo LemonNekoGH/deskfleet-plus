@@ -29,6 +29,7 @@ use crate::renderer::{PhysicalSize, Renderer};
 use crate::session::{self, Frames};
 use crate::zoom::{self, Zoom};
 use crate::{Error, WindowEvent};
+use deskfleet_native::rtc::mobile_ports;
 
 #[derive(Clone)]
 pub(crate) struct AndroidNotifier {
@@ -80,6 +81,8 @@ struct ActiveSession {
     shutdown: watch::Sender<bool>,
     render_thread: Option<JoinHandle<()>>,
     runtime_thread: Option<JoinHandle<()>>,
+    #[cfg(target_os = "ios")]
+    clipboard: crate::ios_clipboard_delivery::Target,
 }
 
 static ACTIVE: OnceLock<Mutex<Option<ActiveSession>>> = OnceLock::new();
@@ -90,6 +93,8 @@ fn active_slot() -> &'static Mutex<Option<ActiveSession>> {
 
 impl ActiveSession {
     fn stop(&mut self) {
+        #[cfg(target_os = "ios")]
+        self.clipboard.close();
         self.shutdown.send_replace(true);
         let _ = self.commands_tx.try_send(Command::Close);
         let _ = self.render_tx.send(RenderCommand::Stop);
@@ -359,9 +364,8 @@ fn send_render(cmd: RenderCommand) {
 }
 
 fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
-    if let Ok(mut guard) = active_slot().lock()
-        && let Some(mut previous) = guard.take()
-    {
+    let previous = active_slot().lock().ok().and_then(|mut guard| guard.take());
+    if let Some(mut previous) = previous {
         previous.stop();
     }
     protocol::set_emitter(Some(emitter));
@@ -371,6 +375,8 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
     let (input, inputs) = input_queue::channel();
     let (shutdown, shutdown_rx) = watch::channel(false);
     let (render_tx, render_rx) = mpsc::unbounded_channel();
+    #[cfg(target_os = "ios")]
+    let clipboard = crate::ios_clipboard_delivery::Target::default();
     let notifier = AndroidNotifier {
         tx: render_tx.clone(),
     };
@@ -384,6 +390,8 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
 
     let runtime_shutdown = shutdown.clone();
     let runtime_render_tx = render_tx.clone();
+    #[cfg(target_os = "ios")]
+    let runtime_clipboard = clipboard.clone();
     let runtime_thread = std::thread::Builder::new()
         .name("android viewer session".into())
         .spawn(move || {
@@ -391,6 +399,8 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
                 .enable_all()
                 .build()
             else {
+                #[cfg(target_os = "ios")]
+                runtime_clipboard.close();
                 let _ = protocol::emit(
                     json!({"type":"error", "error":"failed to create Tokio runtime"}),
                 );
@@ -405,6 +415,8 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
             )) {
                 let _ = protocol::emit(json!({"type":"error", "error":error.to_string()}));
             }
+            #[cfg(target_os = "ios")]
+            runtime_clipboard.close();
             runtime_shutdown.send_replace(true);
             let _ = runtime_render_tx.send(RenderCommand::Stop);
             runtime.shutdown_timeout(Duration::from_secs(2));
@@ -419,6 +431,8 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
             shutdown,
             render_thread,
             runtime_thread,
+            #[cfg(target_os = "ios")]
+            clipboard,
         });
     }
 }
@@ -443,20 +457,41 @@ fn send_command(raw: &str) {
             });
         }
         Ok(Command::Input { event }) => send_view_input(vec![event]),
+        // The mobile host submits its pasteboard read just before the key or
+        // button. Both must reach the same render FIFO in that order.
+        Ok(Command::Clipboard { text }) => {
+            if let Some(text) = crate::clipboard::sanitize(&text) {
+                send_view_input(vec![InputEvent::Clipboard { text }]);
+            }
+        }
         Ok(Command::Text {
             text,
             paste_code,
             paste_shift,
         }) => {
-            if let Some(events) = crate::input_text::paste_events(text, paste_code, paste_shift) {
-                send_view_input(events);
-            }
+            send_view_input(crate::input_text::mobile_commit_events(
+                text,
+                paste_code,
+                paste_shift,
+            ));
         }
         Ok(command) => {
-            let tx = active_slot()
-                .lock()
-                .ok()
-                .and_then(|g| g.as_ref().map(|s| s.commands_tx.clone()));
+            #[cfg(target_os = "ios")]
+            let mut command = command;
+            let tx = active_slot().lock().ok().and_then(|g| {
+                g.as_ref().map(|s| {
+                    #[cfg(target_os = "ios")]
+                    match &mut command {
+                        Command::Start { clipboard, .. } => {
+                            *clipboard = Some(s.clipboard.start_peer());
+                        }
+                        Command::Stop => s.clipboard.stop_peer(),
+                        Command::Close => s.clipboard.close(),
+                        _ => {}
+                    }
+                    s.commands_tx.clone()
+                })
+            });
             if let Some(tx) = tx {
                 let _ = tx.blocking_send(command);
             }
@@ -468,7 +503,8 @@ fn send_command(raw: &str) {
 }
 
 fn stop_session() {
-    if let Some(mut session) = active_slot().lock().ok().and_then(|mut g| g.take()) {
+    let session = active_slot().lock().ok().and_then(|mut guard| guard.take());
+    if let Some(mut session) = session {
         session.stop();
     }
 }
@@ -655,6 +691,66 @@ pub extern "system" fn Java_io_github_yet_1another_1ai_deskfleet_nativedesktop_D
         .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }
 
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_yet_1another_1ai_deskfleet_nativedesktop_DeskFleetBridge_nativePortsInit<
+    'local,
+>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    callback: JObject<'local>,
+) {
+    unowned_env
+        .with_env(|env| -> Result<(), jni::errors::Error> {
+            let vm = env.get_java_vm()?;
+            let callback_ref = env.new_global_ref(callback)?;
+            mobile_ports::set_event_emitter(Some(Arc::new(move |payload: String| {
+                let _ = vm.attach_current_thread(|env| -> Result<(), jni::errors::Error> {
+                    let jstr = JString::from_str(env, &payload)?;
+                    env.call_method(
+                        &callback_ref,
+                        jni_str!("onPortsEvent"),
+                        jni_sig!("(Ljava/lang/String;)V"),
+                        &[JValue::Object(jstr.as_ref())],
+                    )?;
+                    Ok(())
+                });
+            })));
+            Ok(())
+        })
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_yet_1another_1ai_deskfleet_nativedesktop_DeskFleetBridge_nativePortsCall<
+    'local,
+>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    request_json: JString<'local>,
+) -> jstring {
+    unowned_env
+        .with_env(|env| -> Result<jstring, jni::errors::Error> {
+            let payload = mobile_ports::handle_command(&request_json.to_string());
+            let jstr = JString::from_str(env, &payload)?;
+            Ok(jstr.into_raw())
+        })
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_yet_1another_1ai_deskfleet_nativedesktop_DeskFleetBridge_nativePortsCloseAll<
+    'local,
+>(
+    _unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    mobile_ports::set_event_emitter(None);
+    mobile_ports::close_all();
+}
+
 #[cfg(target_os = "ios")]
 #[unsafe(no_mangle)]
 pub extern "C" fn deskfleet_ios_start(
@@ -711,9 +807,18 @@ pub(crate) fn detach_video_layer() {
 }
 
 #[cfg(target_os = "ios")]
-#[unsafe(no_mangle)]
-pub extern "C" fn deskfleet_ios_touch(kind: i32, x: f64, y: f64, dx: f64, dy: f64) {
+pub(crate) fn send_touch(kind: i32, x: f64, y: f64, dx: f64, dy: f64) {
     send_render(RenderCommand::Touch { kind, x, y, dx, dy });
+}
+
+/// Capture once when creating a VideoView; old views retain their original scope.
+#[cfg(target_os = "ios")]
+pub(crate) fn clipboard_target() -> Option<crate::ios_clipboard_delivery::Target> {
+    active_slot()
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|session| session.clipboard.clone())
 }
 
 #[cfg(target_os = "ios")]
@@ -738,9 +843,52 @@ pub unsafe extern "C" fn deskfleet_ios_test_nat(
 
 #[cfg(target_os = "ios")]
 #[unsafe(no_mangle)]
+pub extern "C" fn deskfleet_ios_ports_init(
+    on_event: Option<unsafe extern "C" fn(*const std::ffi::c_char)>,
+) {
+    let Some(on_event) = on_event else {
+        mobile_ports::set_event_emitter(None);
+        return;
+    };
+    mobile_ports::set_event_emitter(Some(Arc::new(move |payload| {
+        if let Ok(cstr) = std::ffi::CString::new(payload) {
+            // SAFETY: `cstr` is a valid NUL-terminated string for the duration of this call.
+            unsafe { on_event(cstr.as_ptr()) };
+        }
+    })));
+}
+
+/// # Safety
+/// `request_json` must be either null or a valid NUL-terminated UTF-8 string.
+/// The returned pointer, when non-null, must be freed via `deskfleet_ios_string_free`.
+#[cfg(target_os = "ios")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn deskfleet_ios_ports_call(
+    request_json: *const std::ffi::c_char,
+) -> *mut std::ffi::c_char {
+    let payload = if request_json.is_null() {
+        json!({ "error": "Missing port forwarding request" }).to_string()
+    } else {
+        // SAFETY: Caller guarantees `request_json` is a valid NUL-terminated UTF-8 string.
+        match unsafe { std::ffi::CStr::from_ptr(request_json) }.to_str() {
+            Ok(raw) => mobile_ports::handle_command(raw),
+            Err(error) => json!({ "error": error.to_string() }).to_string(),
+        }
+    };
+    std::ffi::CString::new(payload).map_or(std::ptr::null_mut(), std::ffi::CString::into_raw)
+}
+
+#[cfg(target_os = "ios")]
+#[unsafe(no_mangle)]
+pub extern "C" fn deskfleet_ios_ports_close_all() {
+    mobile_ports::close_all();
+}
+
+#[cfg(target_os = "ios")]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskfleet_ios_string_free(ptr: *mut std::ffi::c_char) {
     if !ptr.is_null() {
-        // SAFETY: `ptr` was allocated by `CString::into_raw` in `deskfleet_ios_test_nat`.
+        // SAFETY: `ptr` was allocated by `CString::into_raw` in `deskfleet_ios_test_nat` or `deskfleet_ios_ports_call`.
         unsafe { drop(std::ffi::CString::from_raw(ptr)) };
     }
 }

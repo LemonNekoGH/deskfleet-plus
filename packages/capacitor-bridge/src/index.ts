@@ -23,6 +23,7 @@ import {
   type LocalDaemonBridgePlugin,
   type RemoteAgentSettingsBridgePlugin,
 } from "./local-daemon.ts"
+import { createCapacitorPortsApi as portsApi, type PortsBridgePlugin } from "./ports.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
 import {
   createCapacitorWirelessAdbApi as wirelessAdbApi,
@@ -52,6 +53,7 @@ export interface TelemetryBridgePlugin {
 export interface DeskFleetBridgeCapacitorPlugin
   extends SpeechBridgePlugin,
     FilesBridgePlugin,
+    PortsBridgePlugin,
     TelemetryBridgePlugin,
     LocalDaemonBridgePlugin,
     RemoteAgentSettingsBridgePlugin,
@@ -93,6 +95,10 @@ export interface DeskFleetBridgeCapacitorPlugin
     eventName: "wirelessAdbState",
     listenerFunc: Parameters<WirelessAdbBridgePlugin["addListener"]>[1],
   ): Promise<PluginListenerHandle>
+  addListener(
+    eventName: "portsEvent",
+    listenerFunc: Parameters<PortsBridgePlugin["addListener"]>[1],
+  ): Promise<PluginListenerHandle>
 }
 
 export type ViewerBridgePlugin = Pick<
@@ -128,6 +134,10 @@ export function createCapacitorWirelessAdbApi(
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {
   return createBrowserFiles(central, () => new CapacitorFilesEndpoint(plugin))
+}
+
+export function createCapacitorPortsApi(central: CentralApi, plugin: PortsBridgePlugin = DeskFleetBridge) {
+  return portsApi(central, plugin)
 }
 
 export function createCapacitorSpeechApi(plugin: SpeechBridgePlugin = DeskFleetBridge) {

@@ -8,6 +8,7 @@ import {
   createCapacitorNativeDesktopApi,
   createCapacitorNetworkDiagnosticsApi,
   createCapacitorOutlineAudioApi,
+  createCapacitorPortsApi,
   createCapacitorPushNotifications,
   createCapacitorSpeechApi,
   createCapacitorTelemetrySink,
@@ -38,11 +39,13 @@ if (Capacitor.isNativePlatform()) {
   setNativeTelemetrySink(createCapacitorTelemetrySink())
   adapter.speech = createCapacitorSpeechApi()
   adapter.haptic = kind => { void DeskFleetBridge.haptic({ kind }) }
+  adapter.openExternal = url => DeskFleetBridge.openExternal({ url })
 }
 if (Capacitor.getPlatform() === "ios") {
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
 }
 if (Capacitor.isNativePlatform() && adapter.central) {
+  adapter.ports = createCapacitorPortsApi(adapter.central)
   adapter.nativeDesktop = createCapacitorNativeDesktopApi(adapter.central)
   adapter.networkDiagnostics = createCapacitorNetworkDiagnosticsApi(
     adapter.central as HttpCentralClient,

@@ -38,13 +38,17 @@ changing the daemon's lifetime.
 
 Native viewers share a pure-Rust NSH control surface: the floating toolbar, its
 Control, Config, and Monitor dropdowns, and the Hacker Keyboard use the same
-components, translations, theme, and typed actions. Desktop hosts these components
+components, translations, theme, and typed actions. The workspace Rust nshm
+`deskfleet-viewer-controls` computes ordered effects from each window’s current
+state. GPUI, Kotlin, and Swift apply those effects on their UI thread. Desktop hosts these components
 in GPUI. Rust mounts the video surface, system IME editor, and NSH overlay inside
 an Android activity or iOS view controller. One Rust layout places and hit-tests
 the controls on both platforms. UIKit's Metal view receives hardware key presses
 and indirect pointer events. Android dispatches key and motion events from the
 activity. Both feed the same Rust viewer input queue and video coordinate mapping.
-Swift and Kotlin supply lifecycle, clipboard, and system IME adapters.
+Swift and Kotlin supply lifecycle and system IME adapters. Kotlin connects
+Android's clipboard to the shared Rust policy. On iOS the mounted Rust video
+view owns the policy and accesses UIKit's pasteboard through `objc2-ui-kit`.
 Decoded pixels stay in Rust. Control gathers input (pointer, keyboards, shortcuts, clipboard, and
 mobile pinch zoom); Config gathers display, control permission, full screen, and
 the connection; Monitor shows receiver-side stream health.
@@ -418,15 +422,17 @@ the browser's scrolling behavior. Reduced-motion preferences settle targeted
 movement immediately and stop inertial movement at its current position.
 
 Below 1024 CSS pixels, a Session shows one full-width view at a time.
-Chat, Changes, each terminal, and each preview form one ordered list without
+Chat, Changes, Desktops, each terminal, each static preview, and (on Desktop
+and Capacitor mobile) each persisted Web Preview form one ordered list without
 nested tabs or a two-dimensional window layout. The title bar zooms the content
 out into a three-column overview. Existing view instances keep their DOM parents
 and original layout dimensions while their live surfaces scale and move into
 cards. Selecting a card animates it back to full size. Preview content is inert;
 the overview scrolls vertically and closes with its title-bar button or Escape.
-Unopened terminals show placeholders. Only selecting a terminal view, including
-committing a horizontal swipe to it, mounts its renderer and attaches to the shell.
-Opening the overview or canceling a swipe does not attach unopened terminals.
+Unopened terminals, Desktops, and Web Previews show placeholders. Only selecting
+one of those views, including committing a horizontal swipe to it, mounts its
+renderer and starts its connection. Opening the overview or canceling a swipe
+does not attach or connect unopened views.
 The sidebar uses a Reka UI Drawer bottom sheet with opening and closing
 animations and swipe-to-dismiss. It closes on navigation and does not overwrite
 saved desktop panel widths or open states.
@@ -1559,11 +1565,15 @@ never in place of an authorization or capture error. Generic desktop failures
 also suggest checking that the machine is awake and unlocked.
 
 Desktop's [TCP forwarding](ports.md) API owns local loopback
-listeners in its main process, independently of windows and the local Agent.
+listeners in its main process, independently of windows and the local Agent;
+Capacitor mobile clients reuse the same `deskfleet-ports` native engine through
+`crates/desktop-viewer` and `@deskfleet/capacitor-bridge` for Session Web
+Preview (`localhost`, `127.0.0.1`, or `::1`, where `localhost` probes `[::1]`
+then `127.0.0.1` without DNS).
 The target daemon enables native forwarding only for a `ports:forward` grant.
-Remote control's Port forwarding tab manages these ephemeral connections within
-the selected Team and Machine. They are not catalog resources; closing them
-does not stop the target service.
+Remote control's Port forwarding tab (Desktop-only) manages manual connections
+within the selected Team and Machine. They are not catalog resources; closing
+them does not stop the target service.
 
 The central backend optionally collects coturn Redis Pub/Sub counters by Team
 and stores them in PostgreSQL. See
@@ -1675,6 +1685,11 @@ Opening a preview selects that machine and display in Remote control, where
 the full desktop connects with mouse/keyboard control and supported system audio
 enabled by default. Viewers can change these settings while connected.
 Tools mount when first visited and retain their connections while switching tabs.
+On Desktop and Capacitor mobile, Sessions can also open and persist multiple Web
+Preview tabs from the `+` window menu or compact overview; they remain lazily
+disconnected until first activated, connecting directly on local Desktop
+machines or over ephemeral loopback forwards on remote Machines, while pure Web
+browsers omit Web Preview creation.
 Machine-owned shells live here; Session-owned shells stay in the Session panel.
 System status reads CPU usage, physical memory, swap, battery charge and power
 direction when the machine reports a battery, and machine details from the owning
@@ -1907,6 +1922,7 @@ The Rust workspace contains:
 | `deskfleet-node` | napi-rs wrapper over native capabilities |
 | `deskfleet-server` | Actix Web application in `apps/server` |
 | `deskfleet-desktop-service` | Thin Windows service executable in `apps/desktop-service`, hosting native desktop workers |
+| `deskfleet-viewer-controls` | Rust nshm defining viewer actions, input gates, and ordered host effects |
 | `deskfleet-desktop-viewer` | Native H.264/HEVC/AV1 receive/decode, bounded decoded-frame queue, NSH/GPUI desktop presentation, and remote input; thin viewer executable |
 
 Dependencies flow `server -> protocol -> model`, `server -> control-store -> protocol`,

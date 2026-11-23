@@ -32,8 +32,9 @@ import com.getcapacitor.annotation.PermissionCallback
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.UUID
-import org.json.JSONObject
+import java.util.concurrent.Executors
 import com.longbridge.nsh.NshView
+import org.json.JSONObject
 
 @CapacitorPlugin(
     name = "DeskFleetBridge",
@@ -48,6 +49,9 @@ class DeskFleetBridge : Plugin() {
     private var firebaseTelemetry: FirebaseTelemetryBridge? = null
     private var prootDaemon: ProotDaemonManager? = null
     private var stopWirelessAdbListener: (() -> Unit)? = null
+    private val portsExecutor = Executors.newCachedThreadPool()
+    private val portsLock = Any()
+    @Volatile private var portsInitialized = false
 
     override fun load() {
         super.load()
@@ -370,6 +374,31 @@ class DeskFleetBridge : Plugin() {
         notifyListeners("viewerEvent", JSObject().put("payload", payload))
     }
 
+    @Suppress("unused")
+    fun onPortsEvent(payload: String) {
+        notifyListeners("portsEvent", JSObject().put("payload", payload))
+    }
+
+    @PluginMethod
+    fun portsCall(call: PluginCall) {
+        val request = call.getString("request")?.takeIf { it.isNotEmpty() }
+            ?: return call.reject("Missing port forwarding request")
+        portsExecutor.execute {
+            runCatching {
+                synchronized(portsLock) {
+                    if (!portsInitialized) {
+                        nativePortsInit(this)
+                        portsInitialized = true
+                    }
+                }
+                nativePortsCall(request)
+            }.fold(
+                { response -> call.resolve(JSObject().put("response", response)) },
+                { call.reject(it.message ?: "Failed to invoke port forwarding") },
+            )
+        }
+    }
+
     @PluginMethod
     fun getInstallSource(call: PluginCall) {
         runCatching {
@@ -404,6 +433,7 @@ class DeskFleetBridge : Plugin() {
         runCatching {
             activeViewerPlugin = WeakReference(this)
             viewerUiState = null
+            activeActivity?.get()?.resetClipboardSession()
             nativeStart(this)
             currentActivity.startActivity(Intent(currentActivity, RemoteDesktopActivity::class.java))
         }.fold({ call.resolve() }, { call.reject(it.message ?: "Failed to open native desktop") })
@@ -415,6 +445,9 @@ class DeskFleetBridge : Plugin() {
             ?: return call.reject("Missing command payload")
         runCatching {
             val value = JSONObject(command)
+            if (value.optString("type") in listOf("start", "stop", "close")) {
+                activeActivity?.get()?.resetClipboardSession()
+            }
             if (value.optString("type") == "ui") {
                 val state = value.getJSONObject("state")
                 viewerUiState = state
@@ -523,6 +556,8 @@ class DeskFleetBridge : Plugin() {
         Handler(Looper.getMainLooper()).post { speechInput?.dispose() }
         nativeFiles?.dispose()
         stopSession()
+        runCatching { nativePortsCloseAll() }
+        portsExecutor.shutdown()
         OutlineAudioCaptureService.stop(context)
         super.handleOnDestroy()
     }
@@ -581,6 +616,7 @@ class DeskFleetBridge : Plugin() {
         @JvmStatic external fun nativePhysicalKeyCode(scan: Int): String?
         @JvmStatic external fun nativeInputSequence(eventsJson: String)
         @JvmStatic external fun nativeControlsOwnFocus(handle: Long): Boolean
+        @JvmStatic external fun nativeControlEffects(state: String, action: String): String
         @JvmStatic external fun nativeMountViewer(activity: Activity, keyboard: View, overlay: NshView): SurfaceView
         @JvmStatic external fun nativeDismissPanel(handle: Long): Boolean
         @JvmStatic external fun nativeControlsHit(handle: Long, x: Float, y: Float, grip: Boolean): Boolean
@@ -589,5 +625,8 @@ class DeskFleetBridge : Plugin() {
         @JvmStatic external fun nativeUpdateControls(handle: Long, stateJson: String)
         @JvmStatic external fun nativeDetachControls(handle: Long)
         @JvmStatic external fun nativeTestNat(server: String): String
+        @JvmStatic external fun nativePortsInit(callback: Any)
+        @JvmStatic external fun nativePortsCall(requestJson: String): String
+        @JvmStatic external fun nativePortsCloseAll()
     }
 }
