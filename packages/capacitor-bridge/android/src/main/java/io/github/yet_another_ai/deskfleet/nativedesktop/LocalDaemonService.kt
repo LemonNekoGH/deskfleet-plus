@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -67,8 +68,28 @@ class LocalDaemonService : Service() {
         val nativeLibDir = File(applicationInfo.nativeLibraryDir)
         val baseDir = File(filesDir, "linux")
         val logFile = File(baseDir, "daemon.log")
+        val appVersion = runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "0.0.0"
 
         supervisorThread = Thread({
+            baseDir.mkdirs()
+            File(baseDir, "proot-tmp").mkdirs()
+            runCatching {
+                ProotDaemonManager(
+                    filesDir = filesDir,
+                    cacheDir = File(cacheDir, "deskfleet-proot"),
+                    nativeLibraryDir = nativeLibDir,
+                    versionName = appVersion,
+                    fallbackMachineName = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android",
+                    assetOpener = EmbeddedAssetOpener { name -> runCatching { assets.open(name) }.getOrNull() },
+                    onLog = { chunk -> runCatching { logFile.appendText(chunk) } },
+                ).upgradeDaemonIfNeeded()
+            }.onFailure { error ->
+                runCatching {
+                    logFile.appendText("LocalDaemonService upgrade check failed: ${error.message}\n")
+                }
+            }
             while (isActive && !Thread.currentThread().isInterrupted) {
                 try {
                     baseDir.mkdirs()

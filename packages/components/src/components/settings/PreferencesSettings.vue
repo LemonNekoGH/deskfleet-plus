@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { readMarketingAttribution } from "@deskfleet/client/marketing-attribution"
 import { useAccountSession } from "../../composables/useAccountSession.ts"
+import { useLocalDaemonSettings } from "../../composables/useLocalDaemonSettings.ts"
 import { usePlatformClient } from "../../composables/usePlatformClient.ts"
 import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
@@ -20,6 +21,7 @@ import SettingsRow from "./SettingsRow.vue"
 
 const client = usePlatformClient()
 const session = useAccountSession()
+const hasLocalDaemonSettings = useLocalDaemonSettings()
 
 const { t } = useI18n()
 const runningSendBehavior = useRunningSendBehavior()
@@ -84,7 +86,7 @@ if (client.platform === "web" && client.updates) {
     <section v-if="client.wirelessAdb" class="mb-6" aria-labelledby="wireless-adb-heading">
       <AndroidWirelessAdbSettings />
     </section>
-    <section v-if="client.localRemoteAgentSettings" class="mb-6" aria-labelledby="remote-agents-heading">
+    <section v-if="hasLocalDaemonSettings" class="mb-6" aria-labelledby="remote-agents-heading">
       <h2 id="remote-agents-heading" class="ui-section-title mb-2">{{ t("settings.remoteAgentsTitle") }}</h2>
       <div class="ui-card">
         <RemoteAgentSettings />

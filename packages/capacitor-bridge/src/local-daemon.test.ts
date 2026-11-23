@@ -1,11 +1,12 @@
 import { expect, test } from "vitest"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
+import type { RemoteAgentSettings, WorktreePreferences } from "@deskfleet/client/settings"
 import {
-  attachAndroidLocalEnrollment,
-  createAndroidRemoteAgentSettings,
+  attachLocalEnrollment,
+  createLocalDaemonHostSettings,
   type LocalDaemonBridgePlugin,
+  type LocalDaemonSettingsBridgePlugin,
   type PreparedEnrollment,
-  type RemoteAgentSettingsBridgePlugin,
 } from "./local-daemon.ts"
 
 function createFakeCentral(initialServerUrl = "https://fleet.example"): {
@@ -39,7 +40,34 @@ function createEnrollment(overrides: Partial<LocalEnrollment> = {}): LocalEnroll
   }
 }
 
-test("attachAndroidLocalEnrollment exposes localEnrollment status from native plugin", async () => {
+function defaultRemoteAgents(): Required<RemoteAgentSettings> {
+  return {
+    allowRead: false,
+    allowOperate: false,
+    allowSessions: false,
+    allowWorkspaces: false,
+    allowSuperAgent: false,
+    allowLocalCrossWorkspace: false,
+  }
+}
+
+function defaultWorktrees(): WorktreePreferences {
+  return {
+    branchNaming: "semantic",
+    cleanup: {
+      archived: true,
+      merged: true,
+      inactive: true,
+      inactiveDays: 5,
+      settled: true,
+      settledDays: 6,
+      unchanged: true,
+      keepLocalChanges: "uncommitted",
+    },
+  }
+}
+
+test("attachLocalEnrollment exposes localEnrollment status from native plugin", async () => {
   const { central } = createFakeCentral()
   const expected: LocalMachineStatus = {
     machineName: "Pixel 9 Pro",
@@ -51,7 +79,7 @@ test("attachAndroidLocalEnrollment exposes localEnrollment status from native pl
     async localDaemonEnroll() { throw new Error("unexpected enroll") },
   }
 
-  attachAndroidLocalEnrollment(central, plugin)
+  attachLocalEnrollment(central, plugin)
   expect(central.localEnrollment).toBeTypeOf("function")
   expect(await central.localEnrollment!()).toEqual(expected)
 })
@@ -76,7 +104,7 @@ test("enrollLocal short-circuits when an active registration already exists for 
     async localDaemonEnroll() { throw new Error("should not enroll") },
   }
 
-  attachAndroidLocalEnrollment(central, plugin)
+  attachLocalEnrollment(central, plugin)
   const result = await central.enrollLocal!("team-1", "My Phone")
   expect(result).toEqual(existing)
   expect(prepared).toBe(false)
@@ -114,7 +142,7 @@ test("enrollLocal prepares daemon, registers with central, trims machine name, a
     },
   }
 
-  attachAndroidLocalEnrollment(central, plugin)
+  attachLocalEnrollment(central, plugin)
   const result = await central.enrollLocal!("team-1", "  Lemon Phone  ")
   expect(result).toEqual(enrolledRecord)
   expect(prepareCalls).toEqual([{ serverUrl: "https://fleet.example", teamId: "team-1" }])
@@ -148,7 +176,7 @@ test("enrollLocal falls back to daemon machineName on blank input and propagates
     },
   }
 
-  attachAndroidLocalEnrollment(central, plugin)
+  attachLocalEnrollment(central, plugin)
   await expect(central.enrollLocal!("team-1", 123 as unknown as string)).rejects.toThrow(/Invalid machine name/)
   await expect(central.enrollLocal!("team-1", "   ")).rejects.toThrow(/container enroll failed/)
   expect(calls[0]?.payload).toEqual({
@@ -192,7 +220,7 @@ test("onLocalEnrollmentOutput streams native logs and milestones without leaking
     },
   }
 
-  attachAndroidLocalEnrollment(central, plugin)
+  attachLocalEnrollment(central, plugin)
   const chunks: string[] = []
   const unsubscribe = central.onLocalEnrollmentOutput!(chunk => chunks.push(chunk))
   await central.enrollLocal!("team-1", "Phone")
@@ -226,7 +254,7 @@ test("onLocalEnrollmentOutput streams native logs and milestones without leaking
     },
   }
   const { central: failingCentral } = createFakeCentral()
-  attachAndroidLocalEnrollment(failingCentral, failingPlugin)
+  attachLocalEnrollment(failingCentral, failingPlugin)
   const failedChunks: string[] = []
   const stop = failingCentral.onLocalEnrollmentOutput!(chunk => failedChunks.push(chunk))
   await expect(failingCentral.enrollLocal!("team-1", "Phone")).rejects.toThrow(/rootfs download failed/)
@@ -236,52 +264,106 @@ test("onLocalEnrollmentOutput streams native logs and milestones without leaking
   expect(removed).toBe(2)
 })
 
-test("createAndroidRemoteAgentSettings reads, normalizes, and writes Remote Agent permissions", async () => {
-  let stored = {
-    allowRead: true,
-    allowOperate: false,
-    allowSessions: true,
-    allowWorkspaces: false,
-    allowSuperAgent: false,
-    allowLocalCrossWorkspace: true,
-  }
-  const calls: unknown[] = []
-  const plugin: RemoteAgentSettingsBridgePlugin = {
-    async localDaemonGetRemoteAgentSettings() {
-      return stored
-    },
-    async localDaemonSetRemoteAgentSettings(settings) {
-      calls.push(settings)
-      stored = {
-        allowRead: settings.allowRead,
-        allowOperate: settings.allowOperate,
-        allowSessions: Boolean(settings.allowSessions),
-        allowWorkspaces: Boolean(settings.allowWorkspaces),
-        allowSuperAgent: Boolean(settings.allowSuperAgent),
-        allowLocalCrossWorkspace: Boolean(settings.allowLocalCrossWorkspace),
+test("createLocalDaemonHostSettings probes via CLI, coalesces concurrent probes, and diffs updates", async () => {
+  const remoteState = { ...defaultRemoteAgents(), allowRead: true }
+  const worktreeState = defaultWorktrees()
+  const cliCalls: string[][] = []
+
+  const plugin: LocalDaemonSettingsBridgePlugin = {
+    async localDaemonSettings({ args }) {
+      cliCalls.push(args)
+      const [action, key, value] = args
+      if (action === "get") {
+        if (key === "remoteAgents") return { ...remoteState }
+        if (key === "worktrees") return { root: null, ...structuredClone(worktreeState) }
+        return {
+          remoteAgents: { ...remoteState },
+          worktrees: { root: null, ...structuredClone(worktreeState) },
+        }
       }
-      return stored
+      if (action === "set" && key && value !== undefined) {
+        if (key.startsWith("remoteAgents.")) {
+          const field = key.slice("remoteAgents.".length) as keyof Required<RemoteAgentSettings>
+          remoteState[field] = value === "true"
+          return { ...remoteState }
+        }
+        if (key === "worktrees.branchNaming") {
+          worktreeState.branchNaming = value as WorktreePreferences["branchNaming"]
+          return structuredClone(worktreeState) as unknown as Record<string, unknown>
+        }
+        if (key.startsWith("worktrees.cleanup.")) {
+          const field = key.slice("worktrees.cleanup.".length) as keyof WorktreePreferences["cleanup"]
+          if (field === "inactiveDays" || field === "settledDays") {
+            worktreeState.cleanup[field] = Number(value)
+          } else if (field === "keepLocalChanges") {
+            worktreeState.cleanup[field] = value as WorktreePreferences["cleanup"]["keepLocalChanges"]
+          } else {
+            worktreeState.cleanup[field] = value === "true"
+          }
+          return structuredClone(worktreeState) as unknown as Record<string, unknown>
+        }
+      }
+      throw new Error(`Unexpected CLI args: ${args.join(" ")}`)
     },
   }
 
-  const settingsApi = createAndroidRemoteAgentSettings(plugin)
-  expect(await settingsApi.getRemoteAgentSettings()).toEqual(stored)
-  expect(await settingsApi.setRemoteAgentSettings({ allowRead: true, allowOperate: true })).toEqual({
+  const hostSettings = createLocalDaemonHostSettings(plugin)
+
+  // Concurrent probes share one CLI invocation.
+  const [firstProbe, secondProbe] = await Promise.all([
+    hostSettings.probeLocalDaemonSettings(),
+    hostSettings.probeLocalDaemonSettings(),
+  ])
+  expect(firstProbe).toBe(true)
+  expect(secondProbe).toBe(true)
+  expect(cliCalls).toEqual([["get"]])
+
+  // Reads query the requested section directly from the daemon CLI.
+  expect(await hostSettings.settings.getRemoteAgentSettings()).toEqual(remoteState)
+  expect(await hostSettings.settings.getWorktreePreferences()).toEqual(worktreeState)
+  expect(cliCalls).toEqual([["get"], ["get", "remoteAgents"], ["get", "worktrees"]])
+
+  // Saving remote agent settings invokes `settings set` only for changed keys.
+  cliCalls.length = 0
+  const updatedRemote = await hostSettings.settings.setRemoteAgentSettings({
+    ...remoteState,
+    allowOperate: true,
+    allowSuperAgent: true,
+  })
+  expect(updatedRemote).toEqual({
+    ...defaultRemoteAgents(),
     allowRead: true,
     allowOperate: true,
-    allowSessions: false,
-    allowWorkspaces: false,
-    allowSuperAgent: false,
-    allowLocalCrossWorkspace: false,
+    allowSuperAgent: true,
   })
-  expect(calls).toEqual([
-    {
-      allowRead: true,
-      allowOperate: true,
-      allowSessions: false,
-      allowWorkspaces: false,
-      allowSuperAgent: false,
-      allowLocalCrossWorkspace: false,
-    },
+  expect(cliCalls).toEqual([
+    ["get", "remoteAgents"],
+    ["set", "remoteAgents.allowOperate", "true"],
+    ["set", "remoteAgents.allowSuperAgent", "true"],
   ])
+
+  // Saving worktree preferences invokes `settings set` only for changed leaves.
+  cliCalls.length = 0
+  const nextWorktrees = structuredClone(worktreeState)
+  nextWorktrees.branchNaming = "session"
+  nextWorktrees.cleanup.archived = false
+  nextWorktrees.cleanup.settledDays = 0
+  const updatedWorktrees = await hostSettings.settings.setWorktreePreferences(nextWorktrees)
+  expect(updatedWorktrees).toEqual(nextWorktrees)
+  expect(cliCalls).toEqual([
+    ["get", "worktrees"],
+    ["set", "worktrees.branchNaming", "session"],
+    ["set", "worktrees.cleanup.archived", "false"],
+    ["set", "worktrees.cleanup.settledDays", "0"],
+  ])
+})
+
+test("probeLocalDaemonSettings returns false when local daemon CLI is unavailable", async () => {
+  const hostSettings = createLocalDaemonHostSettings({
+    async localDaemonSettings() {
+      throw new Error("Local daemon is not installed")
+    },
+  })
+
+  expect(await hostSettings.probeLocalDaemonSettings()).toBe(false)
 })

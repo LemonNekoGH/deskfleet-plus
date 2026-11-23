@@ -29,8 +29,11 @@ export interface DeskfleetDesktopApi {
   platform: "darwin" | "linux" | "win32" | "web"
   /** True when running inside the native mobile client (Android / iOS). */
   mobile?: boolean
-  /** True when the host manages local daemon Remote Agent permissions (Android embedded daemon). */
-  localRemoteAgentSettings?: boolean
+  /**
+   * Probes whether this host has a local daemon whose CLI-backed host settings
+   * (`remoteAgents`, `worktrees`, etc.) can currently be read and updated.
+   */
+  probeLocalDaemonSettings?: () => Promise<boolean>
   wirelessAdb?: WirelessAdbApi
   central?: CentralApi
   /** Only the Web host exposes site administration. */

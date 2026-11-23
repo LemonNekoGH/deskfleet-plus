@@ -285,6 +285,46 @@ internal class ProotDaemonManager(
         return extractJsonObject(result.stdout, "enroll")
     }
 
+    fun settings(args: List<String>): String {
+        if (!daemonBin.exists()) {
+            throw IllegalStateException("Local daemon is not installed")
+        }
+        val result = runInProot(listOf("/opt/deskfleet/deskfleet-daemon", "settings") + args)
+        if (result.exitCode != 0) {
+            val detail = result.stderr.trim().ifEmpty { result.stdout.trim() }.ifEmpty { "exit code ${result.exitCode}" }
+            throw IllegalStateException("Local daemon settings failed: $detail")
+        }
+        return extractJsonObject(result.stdout, "settings")
+    }
+
+    fun installedBinaryVersion(): String? {
+        if (!daemonBin.exists()) return null
+        val result = runCatching {
+            runInProot(listOf("/opt/deskfleet/deskfleet-daemon", "--info"))
+        }.getOrNull() ?: return null
+        if (result.exitCode != 0) return null
+        return runCatching {
+            JSONObject(extractJsonObject(result.stdout, "--info"))
+                .optJSONObject("native")
+                ?.optString("version")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    private fun installedDaemonVersion(): String =
+        installedBinaryVersion()
+            ?: if (versionFile.isFile) versionFile.readText().trim() else ""
+
+    fun upgradeDaemonIfNeeded(): Boolean {
+        val shellBin = File(rootfsDir, "bin/sh")
+        if (!shellBin.exists()) return false
+        if (daemonBin.exists() && installedDaemonVersion() == versionName) return false
+        prepareRootfsDirectories()
+        installDaemonBinary()
+        return true
+    }
+
     fun ensureProvisioned() {
         cacheDir.mkdirs()
         rootfsDir.mkdirs()
@@ -293,7 +333,7 @@ internal class ProotDaemonManager(
         workspaceDir.mkdirs()
 
         val shellBin = File(rootfsDir, "bin/sh")
-        val installedVersion = if (versionFile.isFile) versionFile.readText().trim() else ""
+        val installedVersion = if (shellBin.exists()) installedDaemonVersion() else ""
         if (shellBin.exists() && daemonBin.exists() && scrcpyJar.isFile && installedVersion == versionName) {
             prepareRootfsDirectories()
             emitSuccess("Embedded Debian container already provisioned (v$versionName).")
@@ -324,33 +364,7 @@ internal class ProotDaemonManager(
         }
 
         if (!daemonBin.exists() || installedVersion != versionName) {
-            val tmpArchive = File(rootfsDir, "tmp/deskfleet-linux-arm64.tar.gz")
-            try {
-                val bundledDaemon = assetOpener.open(EMBEDDED_DAEMON_ASSET)
-                if (bundledDaemon != null) {
-                    emitStep("Extracting bundled DeskFleet daemon (v$versionName)...")
-                    tmpArchive.parentFile?.mkdirs()
-                    bundledDaemon.use { src ->
-                        FileOutputStream(tmpArchive).use { out ->
-                            src.copyTo(out)
-                        }
-                    }
-                } else {
-                    downloadDaemonRelease(tmpArchive)
-                }
-                emitInfo("Unpacking /opt/deskfleet/deskfleet-daemon...")
-                runCheckedInProot(
-                    listOf(
-                        "/bin/sh",
-                        "-c",
-                        "rm -rf /opt/deskfleet/dsh && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz && chmod 0755 /opt/deskfleet/deskfleet-daemon",
-                    ),
-                    streamOutput = true,
-                )
-                versionFile.writeText(versionName, Charsets.UTF_8)
-            } finally {
-                if (tmpArchive.exists()) tmpArchive.delete()
-            }
+            installDaemonBinary()
         }
 
         if (!scrcpyJar.isFile) {
@@ -369,6 +383,36 @@ internal class ProotDaemonManager(
             scrcpyJar.setReadable(true, false)
         }
         emitSuccess("Embedded Debian container provisioned.")
+    }
+
+    private fun installDaemonBinary() {
+        val tmpArchive = File(rootfsDir, "tmp/deskfleet-linux-arm64.tar.gz")
+        try {
+            val bundledDaemon = assetOpener.open(EMBEDDED_DAEMON_ASSET)
+            if (bundledDaemon != null) {
+                emitStep("Extracting bundled DeskFleet daemon (v$versionName)...")
+                tmpArchive.parentFile?.mkdirs()
+                bundledDaemon.use { src ->
+                    FileOutputStream(tmpArchive).use { out ->
+                        src.copyTo(out)
+                    }
+                }
+            } else {
+                downloadDaemonRelease(tmpArchive)
+            }
+            emitInfo("Unpacking /opt/deskfleet/deskfleet-daemon...")
+            runCheckedInProot(
+                listOf(
+                    "/bin/sh",
+                    "-c",
+                    "rm -rf /opt/deskfleet/dsh && rm -f /opt/deskfleet/deskfleet-daemon && tar -xzf /tmp/deskfleet-linux-arm64.tar.gz -C /opt/deskfleet && rm -f /opt/deskfleet/deskfleet-server /tmp/deskfleet-linux-arm64.tar.gz && chmod 0755 /opt/deskfleet/deskfleet-daemon",
+                ),
+                streamOutput = true,
+            )
+            versionFile.writeText(versionName, Charsets.UTF_8)
+        } finally {
+            if (tmpArchive.exists()) tmpArchive.delete()
+        }
     }
 
     private fun extractRootfsTar(rootfsTar: File, shellBin: File) {

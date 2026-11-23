@@ -81,21 +81,41 @@ test("shows telemetry consent switch only when site telemetry is enabled and syn
   expect(updateTelemetryConsent).toHaveBeenCalledWith(expect.objectContaining({ consented: true }))
 })
 
-test("hides Remote Agents and Wireless ADB on pure Web hosts and shows them when Android local host exposes them", async () => {
-  configureClient({ ...host, platform: "web", localRemoteAgentSettings: undefined, wirelessAdb: undefined })
+test("hides Remote Agents and Wireless ADB on pure Web hosts and shows them only after probing a local mobile daemon", async () => {
+  configureClient({ ...host, platform: "web", probeLocalDaemonSettings: undefined, wirelessAdb: undefined })
   wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
   await flushPromises()
   expect(wrapper.find("#remote-agents-heading").exists()).toBe(false)
   expect(wrapper.find("#wireless-adb-heading").exists()).toBe(false)
   wrapper.unmount()
 
-  const getRemoteAgentSettings = vi.fn(async () => ({ allowRead: true, allowOperate: false, allowSessions: false, allowWorkspaces: false }))
-  const setRemoteAgentSettings = vi.fn(async (settings: { allowRead: boolean; allowOperate: boolean; allowSessions?: boolean; allowWorkspaces?: boolean }) => settings)
+  // Mobile host where the local daemon has not been provisioned yet stays hidden.
+  const getUnavailable = vi.fn(async () => ({ allowRead: false, allowOperate: false }))
   configureClient({
     ...host,
     platform: "web",
     mobile: true,
-    localRemoteAgentSettings: true,
+    probeLocalDaemonSettings: vi.fn(async () => false),
+    wirelessAdb: undefined,
+    settings: {
+      ...host.settings,
+      getRemoteAgentSettings: getUnavailable,
+    },
+  })
+  wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
+  await flushPromises()
+  expect(wrapper.find("#remote-agents-heading").exists()).toBe(false)
+  expect(getUnavailable).not.toHaveBeenCalled()
+  wrapper.unmount()
+
+  const getRemoteAgentSettings = vi.fn(async () => ({ allowRead: true, allowOperate: false, allowSessions: false, allowWorkspaces: false }))
+  const setRemoteAgentSettings = vi.fn(async (settings: { allowRead: boolean; allowOperate: boolean; allowSessions?: boolean; allowWorkspaces?: boolean }) => settings)
+  const probeLocalDaemonSettings = vi.fn(async () => true)
+  configureClient({
+    ...host,
+    platform: "web",
+    mobile: true,
+    probeLocalDaemonSettings,
     updates: stubUpdates,
     wirelessAdb: {
       status: vi.fn(async () => ({
@@ -122,6 +142,7 @@ test("hides Remote Agents and Wireless ADB on pure Web hosts and shows them when
   })
   wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
   await flushPromises()
+  expect(probeLocalDaemonSettings).toHaveBeenCalledOnce()
   expect(wrapper.find("#wireless-adb-heading").exists()).toBe(true)
   expect(wrapper.find("#remote-agents-heading").exists()).toBe(true)
   expect(wrapper.find("#updates-heading").exists()).toBe(true)

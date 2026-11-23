@@ -134,23 +134,14 @@ class DeskFleetBridge : Plugin() {
     }
 
     @PluginMethod
-    fun localDaemonGetRemoteAgentSettings(call: PluginCall) {
+    fun localDaemonSettings(call: PluginCall) {
+        val rawArgs = call.getArray("args")
+        val args = (0 until (rawArgs?.length() ?: 0)).map { index ->
+            rawArgs?.optString(index) ?: return call.reject("Invalid settings argument")
+        }
         Thread {
-            runCatching {
-                JSObject(LocalRemoteAgentSettings.fromFilesDir(context.filesDir).read().toJson().toString())
-            }.fold(call::resolve) { call.reject(it.message ?: "Failed to read Remote Agent settings") }
-        }.start()
-    }
-
-    @PluginMethod
-    fun localDaemonSetRemoteAgentSettings(call: PluginCall) {
-        val parsed = runCatching { LocalRemoteAgentSettings.fromJson(call.data) }
-            .getOrElse { return call.reject(it.message ?: "Invalid Remote Agent settings") }
-        Thread {
-            runCatching {
-                val saved = LocalRemoteAgentSettings.fromFilesDir(context.filesDir).write(parsed)
-                JSObject(saved.toJson().toString())
-            }.fold(call::resolve) { call.reject(it.message ?: "Failed to save Remote Agent settings") }
+            runCatching { JSObject(daemon().settings(args)) }
+                .fold(call::resolve) { call.reject(it.message ?: "Failed to run local daemon settings") }
         }.start()
     }
 

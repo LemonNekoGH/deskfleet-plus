@@ -2,8 +2,7 @@ import { App as CapApp } from "@capacitor/app"
 import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core"
 import {
   DeskFleetBridge,
-  attachAndroidLocalEnrollment,
-  createAndroidRemoteAgentSettings,
+  attachLocalEnrollment,
   createCapacitorFilesApi,
   createCapacitorNativeDesktopApi,
   createCapacitorNetworkDiagnosticsApi,
@@ -13,6 +12,7 @@ import {
   createCapacitorSpeechApi,
   createCapacitorTelemetrySink,
   createCapacitorWirelessAdbApi,
+  createLocalDaemonHostSettings,
 } from "@deskfleet/capacitor-bridge"
 import { createAndroidUpdates } from "@deskfleet/capacitor-bridge/app-updates"
 import { setNativeTelemetrySink } from "@deskfleet/client/google-tag"
@@ -40,6 +40,9 @@ if (Capacitor.isNativePlatform()) {
   adapter.speech = createCapacitorSpeechApi()
   adapter.haptic = kind => { void DeskFleetBridge.haptic({ kind }) }
   adapter.openExternal = url => DeskFleetBridge.openExternal({ url })
+  const localDaemonHostSettings = createLocalDaemonHostSettings()
+  adapter.probeLocalDaemonSettings = localDaemonHostSettings.probeLocalDaemonSettings
+  adapter.settings = { ...adapter.settings, ...localDaemonHostSettings.settings }
 }
 if (Capacitor.getPlatform() === "ios") {
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
@@ -75,16 +78,14 @@ if (Capacitor.isNativePlatform() && adapter.central) {
 }
 if (Capacitor.getPlatform() === "android") {
   if (adapter.central) {
-    attachAndroidLocalEnrollment(adapter.central)
+    attachLocalEnrollment(adapter.central)
   }
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
-  adapter.localRemoteAgentSettings = true
   adapter.wirelessAdb = createCapacitorWirelessAdbApi()
   const androidUpdates = await createAndroidUpdates({ getAppInfo: () => CapApp.getInfo() })
   adapter.updates = androidUpdates.updates
   adapter.settings = {
     ...adapter.settings,
-    ...createAndroidRemoteAgentSettings(),
     getAutoDownloadUpdates: androidUpdates.getAutoDownload,
     setAutoDownloadUpdates: androidUpdates.setAutoDownload,
     setPauseUpdatesOnMetered: androidUpdates.setPauseOnMetered,

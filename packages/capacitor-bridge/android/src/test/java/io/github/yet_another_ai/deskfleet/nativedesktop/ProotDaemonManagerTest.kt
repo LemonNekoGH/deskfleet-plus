@@ -425,4 +425,130 @@ class ProotDaemonManagerTest {
         assertFalse(output.contains("super-secret-id-token"))
         assertFalse(output.contains("super-secret-machine-token"))
     }
+
+    @Test
+    fun settingsCliCommandsFailFastWithoutInstalledBinaryAndInvokeDaemonCliWhenPresent() {
+        val invoked = mutableListOf<List<String>>()
+        val logs = StringBuilder()
+        val manager = ProotDaemonManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            nativeLibraryDir = nativeDir,
+            versionName = "0.22.0",
+            fallbackMachineName = "Phone",
+            runner = object : ProotRunner {
+                override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+                    invoked += invocation.args
+                    val tail = invocation.args.takeLast(5)
+                    return when {
+                        tail.contains("get") && tail.last() == "get" -> ShellResult(
+                            0,
+                            """{"remoteAgents":{"allowRead":false,"allowOperate":false,"allowSessions":false,"allowWorkspaces":false,"allowSuperAgent":false,"allowLocalCrossWorkspace":false},"worktrees":{"root":null,"branchNaming":"semantic","cleanup":{"archived":true,"merged":true,"inactive":true,"inactiveDays":5,"settled":true,"settledDays":6,"unchanged":true,"keepLocalChanges":"uncommitted"}}}""",
+                            "",
+                        )
+                        tail.contains("set") -> ShellResult(
+                            0,
+                            """{"allowRead":true,"allowOperate":false,"allowSessions":false,"allowWorkspaces":false,"allowSuperAgent":false,"allowLocalCrossWorkspace":false}""",
+                            "",
+                        )
+                        tail.contains("reset") -> ShellResult(
+                            0,
+                            """{"allowRead":false,"allowOperate":false,"allowSessions":false,"allowWorkspaces":false,"allowSuperAgent":false,"allowLocalCrossWorkspace":false}""",
+                            "",
+                        )
+                        else -> ShellResult(1, "", "unknown key")
+                    }
+                }
+            },
+            onLog = { chunk -> logs.append(chunk) },
+        )
+
+        val missingError = assertThrows(IllegalStateException::class.java) { manager.settings(listOf("get")) }
+        assertTrue(missingError.message.orEmpty().contains("not installed"))
+        assertTrue(invoked.isEmpty())
+
+        val daemonBin = File(filesDir, "linux/rootfs/opt/deskfleet/deskfleet-daemon")
+        daemonBin.parentFile?.mkdirs()
+        daemonBin.writeText("elf")
+
+        val snapshot = JSONObject(manager.settings(listOf("get")))
+        assertFalse(snapshot.getJSONObject("remoteAgents").getBoolean("allowRead"))
+        assertEquals("semantic", snapshot.getJSONObject("worktrees").getString("branchNaming"))
+        assertEquals(listOf("/opt/deskfleet/deskfleet-daemon", "settings", "get"), invoked.last().takeLast(3))
+
+        val updated = JSONObject(manager.settings(listOf("set", "remoteAgents.allowRead", "true")))
+        assertTrue(updated.getBoolean("allowRead"))
+        assertEquals(
+            listOf("/opt/deskfleet/deskfleet-daemon", "settings", "set", "remoteAgents.allowRead", "true"),
+            invoked.last().takeLast(5),
+        )
+
+        val reset = JSONObject(manager.settings(listOf("reset", "remoteAgents")))
+        assertFalse(reset.getBoolean("allowRead"))
+        assertEquals(
+            listOf("/opt/deskfleet/deskfleet-daemon", "settings", "reset", "remoteAgents"),
+            invoked.last().takeLast(4),
+        )
+
+        val failed = assertThrows(IllegalStateException::class.java) { manager.settings(listOf("get", "bad.key")) }
+        assertTrue(failed.message.orEmpty().contains("unknown key"))
+        assertEquals("", logs.toString())
+    }
+
+    @Test
+    fun upgradeDaemonIfNeededInspectsBinaryVersionViaInfoAndUpgradesOnlyOnMismatch() {
+        val baseDir = File(filesDir, "linux")
+        val rootfs = File(baseDir, "rootfs")
+        File(rootfs, "bin").mkdirs()
+        File(rootfs, "bin/sh").writeText("#!/bin/sh\n")
+        File(rootfs, "opt/deskfleet").mkdirs()
+        File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("old-elf")
+        // Even if the stamp file already says 0.22.0, the actual binary reporting 0.19.0 must trigger an upgrade.
+        File(baseDir, "version").writeText("0.22.0")
+
+        var reportedBinaryVersion = "0.19.0"
+        var unpackCalls = 0
+        val manager = ProotDaemonManager(
+            filesDir = filesDir,
+            cacheDir = cacheDir,
+            nativeLibraryDir = nativeDir,
+            versionName = "0.22.0",
+            fallbackMachineName = "Phone",
+            runner = object : ProotRunner {
+                override fun run(invocation: ProotInvocation, stdin: String?): ShellResult {
+                    if (invocation.args.last() == "--info") {
+                        return ShellResult(
+                            0,
+                            """{"native":{"version":"$reportedBinaryVersion","os":"linux","arch":"aarch64"},"runtime":{"name":"bun","version":"1.4.5"}}""",
+                            "",
+                        )
+                    }
+                    if (invocation.args.any { it.contains("tar -xzf /tmp/deskfleet-linux-arm64.tar.gz") }) {
+                        unpackCalls += 1
+                        reportedBinaryVersion = "0.22.0"
+                        File(rootfs, "opt/deskfleet/deskfleet-daemon").writeText("new-elf")
+                        return ShellResult(0, "", "")
+                    }
+                    return ShellResult(1, "", "unexpected: ${invocation.args}")
+                }
+            },
+            assetOpener = EmbeddedAssetOpener { assetName ->
+                if (assetName == ProotDaemonManager.EMBEDDED_DAEMON_ASSET) {
+                    ByteArrayInputStream("new-daemon-tgz".toByteArray())
+                } else {
+                    null
+                }
+            },
+        )
+
+        assertEquals("0.19.0", manager.installedBinaryVersion())
+        assertTrue(manager.upgradeDaemonIfNeeded())
+        assertEquals(1, unpackCalls)
+        assertEquals("0.22.0", manager.installedBinaryVersion())
+        assertEquals("0.22.0", File(baseDir, "version").readText())
+
+        // Once binary version matches app version, subsequent checks are a no-op.
+        assertFalse(manager.upgradeDaemonIfNeeded())
+        assertEquals(1, unpackCalls)
+    }
 }

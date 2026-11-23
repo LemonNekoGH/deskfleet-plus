@@ -7,6 +7,7 @@ import GithubIcon from "../components/common/GithubIcon.vue"
 import SettingsLayout from "../components/settings/SettingsLayout.vue"
 import SidebarLink from "../components/sidebar/SidebarLink.vue"
 import { useAccountSession } from "../composables/useAccountSession.ts"
+import { useLocalDaemonSettings } from "../composables/useLocalDaemonSettings.ts"
 import { usePlatformClient } from "../composables/usePlatformClient.ts"
 import { useNavigationMotion } from "../composables/useNavigationMotion.ts"
 
@@ -15,6 +16,7 @@ const router = useRouter()
 const route = useRoute()
 const account = useAccountSession()
 const client = usePlatformClient()
+const hasLocalDaemonSettings = useLocalDaemonSettings()
 const motion = useNavigationMotion()
 const pushNotificationsEnabled = useFeatureGate("mobile_push_notifications")
 
@@ -30,7 +32,7 @@ function leave(): void {
   <SettingsLayout :motion="motion" @back="leave">
     <template #nav>
       <SidebarLink :to="{ name: 'settings-preferences' }" :icon="SlidersHorizontal" :label="t('settings.preferences')" replace />
-      <SidebarLink v-if="client.platform !== 'web'" :to="{ name: 'settings-worktrees' }" :icon="GitBranch" :label="t('worktreeSettings.title')" replace />
+      <SidebarLink v-if="hasLocalDaemonSettings" :to="{ name: 'settings-worktrees' }" :icon="GitBranch" :label="t('worktreeSettings.title')" replace />
       <SidebarLink :to="{ name: 'settings-appearance' }" :icon="Palette" :label="t('settings.appearance')" replace />
       <SidebarLink v-if="!client.mobile || pushNotificationsEnabled" :to="{ name: 'settings-notifications' }" :icon="Bell" :label="t('settings.notifications')" replace />
       <SidebarLink v-if="account" :to="{ name: 'settings-github' }" :icon="GithubIcon" :label="t('githubSettings.title')" replace />

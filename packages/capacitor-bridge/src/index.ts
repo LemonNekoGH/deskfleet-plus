@@ -18,10 +18,11 @@ import type { OutlineAudioApi, OutlineAudioStatus } from "@deskfleet/client/outl
 import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
 import {
-  attachAndroidLocalEnrollment as localDaemonEnrollment,
-  createAndroidRemoteAgentSettings as androidRemoteAgentSettings,
+  attachLocalEnrollment as localDaemonEnrollment,
+  createLocalDaemonHostSettings as localDaemonHostSettings,
   type LocalDaemonBridgePlugin,
-  type RemoteAgentSettingsBridgePlugin,
+  type LocalDaemonHostSettings,
+  type LocalDaemonSettingsBridgePlugin,
 } from "./local-daemon.ts"
 import { createCapacitorPortsApi as portsApi, type PortsBridgePlugin } from "./ports.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
@@ -39,7 +40,12 @@ export {
   type PushNotificationTarget,
 } from "./push-notifications.ts"
 
-export type { LocalDaemonBridgePlugin, RemoteAgentSettingsBridgePlugin, WirelessAdbBridgePlugin }
+export type {
+  LocalDaemonBridgePlugin,
+  LocalDaemonHostSettings,
+  LocalDaemonSettingsBridgePlugin,
+  WirelessAdbBridgePlugin,
+}
 
 export interface TelemetryBridgePlugin {
   setTelemetryConsent(options: { enabled: boolean }): Promise<{ configured: boolean }>
@@ -56,7 +62,7 @@ export interface DeskFleetBridgeCapacitorPlugin
     PortsBridgePlugin,
     TelemetryBridgePlugin,
     LocalDaemonBridgePlugin,
-    RemoteAgentSettingsBridgePlugin,
+    LocalDaemonSettingsBridgePlugin,
     WirelessAdbBridgePlugin {
   authenticate(options: { url: string; callbackScheme: string }): Promise<{ url: string }>
   getInstallSource?(): Promise<{ installerPackageName: string | null }>
@@ -113,17 +119,17 @@ export type OutlineAudioBridgePlugin = Pick<
 
 export const DeskFleetBridge = registerPlugin<DeskFleetBridgeCapacitorPlugin>("DeskFleetBridge")
 
-export function attachAndroidLocalEnrollment(
+export function attachLocalEnrollment(
   central: CentralApi,
   plugin: LocalDaemonBridgePlugin = DeskFleetBridge,
 ): void {
   localDaemonEnrollment(central, plugin)
 }
 
-export function createAndroidRemoteAgentSettings(
-  plugin: RemoteAgentSettingsBridgePlugin = DeskFleetBridge,
-) {
-  return androidRemoteAgentSettings(plugin)
+export function createLocalDaemonHostSettings(
+  plugin: LocalDaemonSettingsBridgePlugin = DeskFleetBridge,
+): LocalDaemonHostSettings {
+  return localDaemonHostSettings(plugin)
 }
 
 export function createCapacitorWirelessAdbApi(

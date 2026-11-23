@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ChevronDown, RotateCcw } from "@lucide/vue"
 import { useAsyncState } from "@vueuse/core"
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { useI18n } from "vue-i18n"
 import type { WorktreePreferences } from "@deskfleet/client/settings"
+import { useLocalDaemonSettings } from "../../composables/useLocalDaemonSettings.ts"
 import { usePlatformClient } from "../../composables/usePlatformClient.ts"
 import UiButton from "../common/UiButton.vue"
 import UiNumberField from "../common/UiNumberField.vue"
@@ -13,6 +14,7 @@ import SettingsRow from "./SettingsRow.vue"
 import WorktreeRootSettings from "./WorktreeRootSettings.vue"
 
 const client = usePlatformClient()
+const hasLocalDaemonSettings = useLocalDaemonSettings()
 const { t } = useI18n()
 const advanced = ref(false)
 const { state, isLoading, error, executeImmediate } = useAsyncState(
@@ -22,6 +24,11 @@ const { state, isLoading, error, executeImmediate } = useAsyncState(
   null,
   { resetOnExecute: false, immediate: client.platform !== "web" },
 )
+if (client.platform === "web") {
+  watch(hasLocalDaemonSettings, available => {
+    if (available && !state.value && !isLoading.value) void executeImmediate()
+  })
+}
 const busy = computed(() => isLoading.value || !state.value)
 const requestError = computed(() => error.value instanceof Error ? error.value.message : error.value ? String(error.value) : null)
 const namingOptions = computed(() => [
@@ -63,8 +70,8 @@ function saveProtection(value: string): void {
 
 <template>
   <h1 class="ui-page-title mb-2">{{ t("worktreeSettings.title") }}</h1>
-  <p class="mb-6 mt-0 text-[13px] leading-relaxed text-ui-text-muted">{{ t(client.platform === "web" ? "worktreeSettings.desktopOnly" : "worktreeSettings.scope") }}</p>
-  <template v-if="client.platform !== 'web'">
+  <p class="mb-6 mt-0 text-[13px] leading-relaxed text-ui-text-muted">{{ t(hasLocalDaemonSettings ? "worktreeSettings.scope" : "worktreeSettings.desktopOnly") }}</p>
+  <template v-if="hasLocalDaemonSettings">
     <section aria-labelledby="worktree-branches-heading" class="mb-8">
       <h2 id="worktree-branches-heading" class="ui-section-title mb-2">{{ t("worktreeSettings.branches") }}</h2>
       <div class="ui-card">
@@ -107,7 +114,7 @@ function saveProtection(value: string): void {
     <p v-if="requestError" role="alert" class="my-3 break-words text-[13px] text-ui-danger">{{ requestError }}</p>
     <UiButton v-if="!state && requestError" :disabled="isLoading" class="mb-5" @click="executeImmediate()">{{ t("settings.retryLoad") }}</UiButton>
 
-    <section aria-labelledby="worktree-storage-heading">
+    <section v-if="client.platform !== 'web'" aria-labelledby="worktree-storage-heading">
       <h2 id="worktree-storage-heading" class="ui-section-title mb-2">{{ t("worktreeSettings.storage") }}</h2>
       <div class="ui-card"><WorktreeRootSettings /></div>
     </section>

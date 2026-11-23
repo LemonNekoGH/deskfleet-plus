@@ -1,4 +1,4 @@
-import { client as platformClient } from "@deskfleet/client/platform"
+import { client as platformClient, configureClient, getClient } from "@deskfleet/client/platform"
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 import type { WorktreePreferences } from "@deskfleet/client/settings"
@@ -7,6 +7,7 @@ import UiNumberField from "../common/UiNumberField.vue"
 import UiSelect from "../common/UiSelect.vue"
 import WorktreeSettings from "./WorktreeSettings.vue"
 
+const defaultHost = getClient()
 let wrapper: VueWrapper | undefined
 function defaults(): WorktreePreferences {
   return { branchNaming: "semantic", cleanup: { archived: true, merged: true, inactive: true, inactiveDays: 5, settled: true, settledDays: 6, unchanged: true, keepLocalChanges: "uncommitted" } }
@@ -26,6 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   wrapper?.unmount()
   wrapper = undefined
+  configureClient(defaultHost)
   vi.restoreAllMocks()
   i18n.global.locale.value = "en-US"
 })
@@ -141,4 +143,42 @@ test("explains archived cleanup and ignored-file protection in Chinese", async (
   await expand(view)
   expect(view.get("#worktree-archived-label").text()).toBe("清理已归档会话的工作树")
   expect(view.get("#worktree-protection-description").text()).toContain("忽略的文件（包括 .env）会被删除")
+})
+
+test("loads and saves worktree preferences on mobile hosts only when local daemon probe succeeds", async () => {
+  const getWorktreePreferences = vi.fn(async () => defaults())
+  const setWorktreePreferences = vi.fn(async (preferences: WorktreePreferences) => structuredClone(preferences))
+
+  configureClient({
+    ...defaultHost,
+    platform: "web",
+    mobile: true,
+    probeLocalDaemonSettings: vi.fn(async () => false),
+    settings: { ...defaultHost.settings, getWorktreePreferences, setWorktreePreferences },
+  })
+  const hiddenView = render()
+  await flushPromises()
+  expect(hiddenView.find("#worktree-branches-heading").exists()).toBe(false)
+  expect(getWorktreePreferences).not.toHaveBeenCalled()
+  hiddenView.unmount()
+
+  configureClient({
+    ...defaultHost,
+    platform: "web",
+    mobile: true,
+    probeLocalDaemonSettings: vi.fn(async () => true),
+    settings: { ...defaultHost.settings, getWorktreePreferences, setWorktreePreferences },
+  })
+  const view = render()
+  await flushPromises()
+  expect(getWorktreePreferences).toHaveBeenCalledOnce()
+  expect(view.find("#worktree-branches-heading").exists()).toBe(true)
+  expect(view.find("#worktree-cleanup-heading").exists()).toBe(true)
+  expect(view.find("#worktree-storage-heading").exists()).toBe(false)
+
+  await view.get('#worktree-archived-row [role="switch"]').trigger("click")
+  await flushPromises()
+  const expected = defaults()
+  expected.cleanup.archived = false
+  expect(setWorktreePreferences).toHaveBeenCalledExactlyOnceWith(expected)
 })

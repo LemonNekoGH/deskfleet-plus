@@ -1,6 +1,8 @@
 import type { PluginListenerHandle } from "@capacitor/core"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
-import type { RemoteAgentSettings, SettingsApi } from "@deskfleet/client/settings"
+import type { SettingsApi } from "@deskfleet/client/settings"
+import { remoteAgentSettings } from "@deskfleet/protocol/remote-agent-settings"
+import { validateWorktreePreferences } from "@deskfleet/protocol/worktree-preferences"
 
 export type PreparedEnrollment = LocalEnrollment & { identityToken: string }
 
@@ -20,41 +22,86 @@ export interface LocalDaemonBridgePlugin {
   ): Promise<PluginListenerHandle>
 }
 
-export interface RemoteAgentSettingsBridgePlugin {
-  localDaemonGetRemoteAgentSettings(): Promise<RemoteAgentSettings>
-  localDaemonSetRemoteAgentSettings(settings: RemoteAgentSettings): Promise<RemoteAgentSettings>
+export interface LocalDaemonSettingsBridgePlugin {
+  /** Runs `deskfleet-daemon settings <...args>` and returns its parsed JSON object output. */
+  localDaemonSettings(options: { args: string[] }): Promise<Record<string, unknown>>
 }
 
-function normalizeRemoteAgentSettings(value: RemoteAgentSettings): RemoteAgentSettings {
-  return {
-    allowRead: Boolean(value.allowRead),
-    allowOperate: Boolean(value.allowOperate),
-    allowSessions: Boolean(value.allowSessions),
-    allowWorkspaces: Boolean(value.allowWorkspaces),
-    allowSuperAgent: Boolean(value.allowSuperAgent),
-    allowLocalCrossWorkspace: Boolean(value.allowLocalCrossWorkspace),
+export interface LocalDaemonHostSettings {
+  probeLocalDaemonSettings(): Promise<boolean>
+  settings: Pick<
+    SettingsApi,
+    "getRemoteAgentSettings" | "setRemoteAgentSettings" | "getWorktreePreferences" | "setWorktreePreferences"
+  >
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function diffLeaves(prefix: string, prev: Record<string, unknown>, next: Record<string, unknown>): [string, string][] {
+  const updates: [string, string][] = []
+  for (const [key, value] of Object.entries(next)) {
+    const path = `${prefix}.${key}`
+    if (isPlainRecord(value) && isPlainRecord(prev[key])) {
+      updates.push(...diffLeaves(path, prev[key], value))
+    } else if (value !== prev[key]) {
+      updates.push([path, String(value)])
+    }
   }
+  return updates
 }
 
-export function createAndroidRemoteAgentSettings(
-  plugin: RemoteAgentSettingsBridgePlugin,
-): Pick<SettingsApi, "getRemoteAgentSettings" | "setRemoteAgentSettings"> {
+/**
+ * Exposes CLI-backed local daemon host settings (`deskfleet-daemon settings`)
+ * across mobile hosts (Android proot, iOS RVVM) via a single native bridge call.
+ */
+export function createLocalDaemonHostSettings(
+  plugin: LocalDaemonSettingsBridgePlugin,
+): LocalDaemonHostSettings {
+  let inFlightProbe: Promise<boolean> | undefined
+
+  const readSection = async <T>(section: string, parse: (value: unknown) => T): Promise<T> =>
+    parse(await plugin.localDaemonSettings({ args: ["get", section] }))
+
+  const writeSection = async <T extends object>(section: string, next: T, parse: (value: unknown) => T): Promise<T> => {
+    const target = parse(next)
+    const current: T = await readSection(section, parse)
+    const updates = diffLeaves(section, current as Record<string, unknown>, target as Record<string, unknown>)
+    let latest: T = current
+    for (const [key, value] of updates) {
+      latest = parse(await plugin.localDaemonSettings({ args: ["set", key, value] }))
+    }
+    return latest
+  }
+
   return {
-    async getRemoteAgentSettings(): Promise<RemoteAgentSettings> {
-      return normalizeRemoteAgentSettings(await plugin.localDaemonGetRemoteAgentSettings())
+    probeLocalDaemonSettings(): Promise<boolean> {
+      return (inFlightProbe ??= plugin
+        .localDaemonSettings({ args: ["get"] })
+        .then(snapshot => {
+          remoteAgentSettings(snapshot.remoteAgents)
+          validateWorktreePreferences(snapshot.worktrees)
+          return true
+        })
+        .catch(() => false)
+        .finally(() => { inFlightProbe = undefined }))
     },
-    async setRemoteAgentSettings(settings: RemoteAgentSettings): Promise<RemoteAgentSettings> {
-      const normalized = normalizeRemoteAgentSettings(settings)
-      return normalizeRemoteAgentSettings(await plugin.localDaemonSetRemoteAgentSettings(normalized))
+    settings: {
+      getRemoteAgentSettings: () => readSection("remoteAgents", remoteAgentSettings),
+      setRemoteAgentSettings: next => writeSection("remoteAgents", next, remoteAgentSettings),
+      getWorktreePreferences: () => readSection("worktrees", validateWorktreePreferences),
+      setWorktreePreferences: next => writeSection("worktrees", next, validateWorktreePreferences),
     },
   }
 }
 
 /**
- * Attach local-machine enrollment to an Android CentralApi using the embedded
- * proot Linux container managed by the native Capacitor bridge.
+ * Attach local-machine enrollment to a mobile CentralApi using the embedded
+ * Linux runtime managed by the native Capacitor bridge (proot on Android,
+ * librvvm on iOS).
  */
-export function attachAndroidLocalEnrollment(
+export function attachLocalEnrollment(
   central: CentralApi,
   plugin: LocalDaemonBridgePlugin,
 ): void {
