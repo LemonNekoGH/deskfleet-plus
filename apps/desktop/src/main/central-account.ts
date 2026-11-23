@@ -6,7 +6,7 @@ import { HttpCentralClient, serverAddress, type SavedAccount } from "@deskfleet/
 import { CENTRAL_METHODS, centralIpcFailure } from "@deskfleet/client/central-bridge"
 import type { CentralEvent } from "@deskfleet/client/central"
 import { setPeerTelemetrySink } from "@deskfleet/client/peer-telemetry"
-import type { ControlMethods } from "../../../daemon/src/control-protocol.ts"
+import type { ControlMethods } from "@deskfleet/protocol/control"
 import { DaemonClient } from "./daemon-client.ts"
 import { isDesktopMediaSender } from "./desktop-media.ts"
 import { enrollLocalMachine } from "./local-enrollment.ts"
@@ -28,8 +28,18 @@ async function readAccount(path: string): Promise<SavedAccount> {
     throw error
   }
   if (value.serverUrl !== serverUrl) return { serverUrl }
-  const token = value.encryptedToken && await safeStorage.isAsyncEncryptionAvailable()
-    ? (await safeStorage.decryptStringAsync(Buffer.from(value.encryptedToken, "base64"))).result : undefined
+  let token: string | undefined
+  if (value.encryptedToken) {
+    try {
+      if (await safeStorage.isAsyncEncryptionAvailable()) {
+        token = (await safeStorage.decryptStringAsync(Buffer.from(value.encryptedToken, "base64"))).result
+      }
+    } catch (error) {
+      // A locked/cancelled Linux keyring or switched password-store backend
+      // must not abort app startup or overwrite the saved account file.
+      console.warn("Could not decrypt saved desktop account token", error)
+    }
+  }
   return { serverUrl, token, user: token ? value.user : undefined }
 }
 async function saveAccount(path: string, account: SavedAccount): Promise<void> {

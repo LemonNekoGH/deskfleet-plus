@@ -13,15 +13,6 @@ internal func deskfleetIosSendCommand(_ commandJson: UnsafePointer<CChar>?)
 @_silgen_name("deskfleet_ios_stop")
 internal func deskfleetIosStop()
 
-@_silgen_name("deskfleet_ios_surface_created")
-internal func deskfleetIosSurfaceCreated(_ layer: UnsafeMutableRawPointer?, _ width: UInt32, _ height: UInt32)
-
-@_silgen_name("deskfleet_ios_surface_changed")
-internal func deskfleetIosSurfaceChanged(_ width: UInt32, _ height: UInt32)
-
-@_silgen_name("deskfleet_ios_surface_destroyed")
-internal func deskfleetIosSurfaceDestroyed()
-
 @_silgen_name("deskfleet_ios_touch")
 internal func deskfleetIosTouch(_ kind: Int32, _ x: Double, _ y: Double, _ dx: Double, _ dy: Double)
 
@@ -33,7 +24,17 @@ internal func deskfleetIosStringFree(_ ptr: UnsafeMutablePointer<CChar>?)
 
 private let viewerEventCallback: @convention(c) (UnsafePointer<CChar>?) -> Void = { payloadPtr in
     guard let payloadPtr else { return }
-    DeskFleetBridge.activePlugin?.notifyListeners("viewerEvent", data: ["payload": String(cString: payloadPtr)])
+    let payload = String(cString: payloadPtr)
+    if payload.contains("\"clipboard\""),
+       let data = payload.data(using: .utf8),
+       let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+       (obj["type"] as? String) == "clipboard",
+       let text = obj["text"] as? String {
+        DispatchQueue.main.async {
+            DeskFleetBridge.activeController?.applyRemoteClipboard(text)
+        }
+    }
+    DeskFleetBridge.activePlugin?.notifyListeners("viewerEvent", data: ["payload": payload])
 }
 
 @objc(DeskFleetBridge)
@@ -233,8 +234,13 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
                 return
             }
             Self.activePlugin = self
+            // Retire the previous view while its input and Metal surface still
+            // address its own Rust session.
+            if let previous = Self.activeController {
+                previous.prepareForExternalStop()
+                previous.dismiss(animated: false)
+            }
             deskfleetIosStart(viewerEventCallback)
-            Self.activeController?.dismiss(animated: false)
 
             let controller = RemoteDesktopViewController()
             controller.modalPresentationStyle = .fullScreen
@@ -253,13 +259,18 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
             call.reject("Missing command payload")
             return
         }
-        command.withCString { deskfleetIosSendCommand($0) }
-        call.resolve()
+        DispatchQueue.main.async {
+            if let data = command.data(using: .utf8),
+               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                Self.activeController?.applyViewerCommand(object)
+            }
+            command.withCString { deskfleetIosSendCommand($0) }
+            call.resolve()
+        }
     }
 
     @objc func close(_ call: CAPPluginCall) {
-        Self.stopSession()
-        call.resolve()
+        Self.stopSession { call.resolve() }
     }
 
     @objc func testNat(_ call: CAPPluginCall) {
@@ -427,13 +438,15 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         Self.stopSession()
     }
 
-    internal static func stopSession() {
-        deskfleetIosStop()
+    internal static func stopSession(completion: (() -> Void)? = nil) {
         DispatchQueue.main.async {
-            guard let controller = activeController else { return }
-            activeController = nil
-            controller.prepareForExternalStop()
-            if !controller.isBeingDismissed { controller.dismiss(animated: false) }
+            if let controller = activeController {
+                activeController = nil
+                controller.prepareForExternalStop()
+                if !controller.isBeingDismissed { controller.dismiss(animated: false) }
+            }
+            deskfleetIosStop()
+            completion?()
         }
     }
 }

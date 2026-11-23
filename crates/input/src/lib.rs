@@ -11,21 +11,28 @@ use serde::{Deserialize, Serialize};
 mod physical_keys;
 pub use physical_keys::NativeKeyCode;
 
+#[cfg(any(target_os = "ios", test))]
+mod hid_keys;
+
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_clipboard;
 #[cfg(any(target_os = "macos", test))]
 mod macos_keys;
 #[cfg(target_os = "macos")]
 use macos::PlatformInput;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_clipboard;
 #[cfg(any(target_os = "windows", test))]
 mod windows_keys;
 #[cfg(target_os = "windows")]
 use windows::PlatformInput;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "android", test))]
 mod linux_keys;
 #[cfg(target_os = "linux")]
 use linux::PlatformInput;
@@ -92,6 +99,9 @@ pub fn request_accessibility_access() -> Option<bool> {
     }
 }
 
+/// Maximum UTF-8 byte length for a remote desktop clipboard update.
+pub const MAX_CLIPBOARD_BYTES: usize = 32 * 1024;
+
 /// Messages on the ordered desktop-input channel.
 ///
 /// Positions are normalized to the selected display, independent of video size.
@@ -121,6 +131,10 @@ pub enum InputEvent {
         pressed: bool,
         #[serde(default)]
         repeat: bool,
+    },
+    /// Synchronize plain-text clipboard contents to the controlled desktop.
+    Clipboard {
+        text: String,
     },
     /// Ask the Windows desktop service to send Ctrl+Alt+Del in this session.
     SecureAttention,
@@ -156,6 +170,9 @@ impl InputEvent {
             Self::Key { code, .. } if code.is_empty() || code.len() > 32 => {
                 Err(InputError::InvalidEvent("invalid physical key code"))
             }
+            Self::Clipboard { text } if text.is_empty() || text.len() > MAX_CLIPBOARD_BYTES => Err(
+                InputError::InvalidEvent("clipboard text must be 1..=32768 UTF-8 bytes"),
+            ),
             _ => Ok(()),
         }
     }
@@ -182,6 +199,20 @@ pub trait Backend {
     /// # Errors
     /// Returns key injection errors or [`InputError::UnsupportedKey`].
     fn key(&mut self, code: &str, pressed: bool, repeat: bool) -> Result<()>;
+    /// Replace the remote desktop clipboard text.
+    ///
+    /// # Errors
+    /// Returns clipboard access errors.
+    fn set_clipboard(&mut self, _text: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Poll the remote desktop clipboard for newly copied text.
+    ///
+    /// # Errors
+    /// Returns clipboard access errors.
+    fn poll_clipboard(&mut self) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// # Errors
     /// Returns unsupported or OS injection errors.
     fn secure_attention(&mut self) -> Result<()> {
@@ -210,6 +241,14 @@ impl Backend for OsBackend {
     }
     fn key(&mut self, code: &str, pressed: bool, repeat: bool) -> Result<()> {
         self.0.key(code, pressed, repeat)
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    fn set_clipboard(&mut self, text: &str) -> Result<()> {
+        self.0.set_clipboard(text)
+    }
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    fn poll_clipboard(&mut self) -> Result<Option<String>> {
+        self.0.poll_clipboard()
     }
     #[cfg(target_os = "windows")]
     fn secure_attention(&mut self) -> Result<()> {
@@ -291,6 +330,15 @@ impl<B: Backend> InputSession<B> {
     /// Returns desktop access or OS input release errors.
     pub fn refresh_desktop(&mut self) -> Result<()> {
         self.controller.refresh_desktop()
+    }
+
+    /// Poll the remote desktop clipboard for newly copied text since the last
+    /// poll or remote clipboard update.
+    ///
+    /// # Errors
+    /// Returns clipboard access errors.
+    pub fn poll_clipboard(&mut self) -> Result<Option<String>> {
+        self.controller.poll_clipboard()
     }
 
     /// Release this session's held keys and buttons. Safe to call repeatedly.

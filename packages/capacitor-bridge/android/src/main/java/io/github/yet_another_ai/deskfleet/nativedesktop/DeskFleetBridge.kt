@@ -15,6 +15,8 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.Surface
+import android.view.SurfaceView
+import android.view.View
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -30,6 +32,8 @@ import com.getcapacitor.annotation.PermissionCallback
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.UUID
+import org.json.JSONObject
+import com.longbridge.nsh.NshView
 
 @CapacitorPlugin(
     name = "DeskFleetBridge",
@@ -360,6 +364,9 @@ class DeskFleetBridge : Plugin() {
 
     @Suppress("unused")
     fun onViewerEvent(payload: String) {
+        if (payload.contains("\"type\":\"clipboard\"")) {
+            activeActivity?.get()?.applyRemoteClipboard(payload)
+        }
         notifyListeners("viewerEvent", JSObject().put("payload", payload))
     }
 
@@ -395,6 +402,8 @@ class DeskFleetBridge : Plugin() {
     fun open(call: PluginCall) {
         val currentActivity = activity ?: return call.reject("Activity unavailable")
         runCatching {
+            activeViewerPlugin = WeakReference(this)
+            viewerUiState = null
             nativeStart(this)
             currentActivity.startActivity(Intent(currentActivity, RemoteDesktopActivity::class.java))
         }.fold({ call.resolve() }, { call.reject(it.message ?: "Failed to open native desktop") })
@@ -404,7 +413,15 @@ class DeskFleetBridge : Plugin() {
     fun send(call: PluginCall) {
         val command = call.getString("command")?.takeIf { it.isNotEmpty() }
             ?: return call.reject("Missing command payload")
-        runCatching { nativeSendCommand(command) }
+        runCatching {
+            val value = JSONObject(command)
+            if (value.optString("type") == "ui") {
+                val state = value.getJSONObject("state")
+                viewerUiState = state
+                activeActivity?.get()?.applyUiState(state)
+            }
+            nativeSendCommand(command)
+        }
             .fold({ call.resolve() }, { call.reject(it.message ?: "Failed to send command") })
     }
 
@@ -512,13 +529,16 @@ class DeskFleetBridge : Plugin() {
 
     companion object {
         init {
-            System.loadLibrary("deskfleet_desktop_viewer")
+            // The viewer and NSH share one native library and one set of runtime globals.
+            System.loadLibrary("nsh")
         }
 
         // Activity results and service start commands both run on the main thread.
         private var pendingOutlineStartCall: PluginCall? = null
 
         @Volatile internal var activeActivity: WeakReference<RemoteDesktopActivity>? = null
+        @Volatile internal var viewerUiState: JSONObject? = null
+        @Volatile private var activeViewerPlugin: WeakReference<DeskFleetBridge>? = null
         @Volatile private var activeOutlinePlugin: WeakReference<DeskFleetBridge>? = null
 
         internal fun completeOutlineAudioStart(started: Boolean, errorMessage: String?) {
@@ -542,6 +562,12 @@ class DeskFleetBridge : Plugin() {
                 act.runOnUiThread { if (!act.isFinishing && !act.isDestroyed) act.finish() }
             }
             activeActivity = null
+            viewerUiState = null
+            activeViewerPlugin = null
+        }
+
+        internal fun emitViewerAction(event: JSONObject) {
+            activeViewerPlugin?.get()?.onViewerEvent(event.toString())
         }
 
         @JvmStatic external fun nativeStart(callback: Any)
@@ -550,7 +576,18 @@ class DeskFleetBridge : Plugin() {
         @JvmStatic external fun nativeSurfaceCreated(surface: Surface, width: Int, height: Int)
         @JvmStatic external fun nativeSurfaceChanged(width: Int, height: Int)
         @JvmStatic external fun nativeSurfaceDestroyed()
+        @JvmStatic external fun nativePointer(phase: Int, buttons: Int, x: Double, y: Double)
         @JvmStatic external fun nativeTouch(kind: Int, x: Double, y: Double, dx: Double, dy: Double)
+        @JvmStatic external fun nativePhysicalKeyCode(scan: Int): String?
+        @JvmStatic external fun nativeInputSequence(eventsJson: String)
+        @JvmStatic external fun nativeControlsOwnFocus(handle: Long): Boolean
+        @JvmStatic external fun nativeMountViewer(activity: Activity, keyboard: View, overlay: NshView): SurfaceView
+        @JvmStatic external fun nativeDismissPanel(handle: Long): Boolean
+        @JvmStatic external fun nativeControlsHit(handle: Long, x: Float, y: Float, grip: Boolean): Boolean
+        @JvmStatic external fun nativeDragToolbar(handle: Long, dx: Float, dy: Float)
+        @JvmStatic external fun nativeAttachControls(view: NshView, callback: Any, stateJson: String): Long
+        @JvmStatic external fun nativeUpdateControls(handle: Long, stateJson: String)
+        @JvmStatic external fun nativeDetachControls(handle: Long)
         @JvmStatic external fun nativeTestNat(server: String): String
     }
 }

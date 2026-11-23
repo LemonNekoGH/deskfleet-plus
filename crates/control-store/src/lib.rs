@@ -1,6 +1,8 @@
 //! PostgreSQL control-plane storage. Independent from each daemon's SQLite catalog.
 mod ai_usage;
 pub mod billing;
+mod cloud_agent_requests;
+mod cloud_sessions;
 mod cloudflare_turn;
 pub(crate) mod entities;
 mod github_app;
@@ -20,11 +22,14 @@ pub mod signaling_limits;
 mod site;
 mod site_usage;
 mod storage_cleanup;
+mod super_agent;
 mod team_turn;
 mod teams;
 mod turn_settings;
 mod turn_usage;
 
+pub use cloud_agent_requests::CloudPrewarm;
+pub use cloud_sessions::{CloudMeterCursor, CloudSessionSummary};
 pub use cloudflare_turn::{
     CloudflareTurnConfig, CloudflareTurnDailyUsage, CloudflareTurnUsageQuery,
 };
@@ -38,6 +43,10 @@ pub use push::{
     SessionTaskNotification, TaskNotificationKind,
 };
 pub use realtime::RealtimeRoute;
+pub use super_agent::{
+    RegisterSuperAgentMachineSession, SuperAgentByoaTarget, SuperAgentByoaUpdate, SuperAgentMode,
+    SuperAgentSessionSummary, TeamSuperAgentConfig, TeamSuperAgentConfigUpdate,
+};
 pub use team_turn::TeamTurnServer;
 pub use turn_usage::{TurnUsage, TurnUsageSide};
 

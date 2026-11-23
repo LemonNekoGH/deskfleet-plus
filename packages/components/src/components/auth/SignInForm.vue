@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n"
 import type { AccountAuthentication, AuthConfig } from "@deskfleet/client/account-security"
 import { HttpError } from "@deskfleet/client/http-central"
 import { passkeysAvailable } from "@deskfleet/client/passkeys"
+import { useAuthCaptcha } from "../../composables/useAuthCaptcha.ts"
 import { failureMessage } from "../../composables/useRecentAuthentication.ts"
 import { setUserTelemetryConsent, trackEvent, userTelemetryConsent } from "../../services/analytics.ts"
 // Official sign-in mark: https://developers.google.com/identity/branding-guidelines
@@ -17,9 +18,9 @@ import UiField from "../common/UiField.vue"
 import AuthLayout from "./AuthLayout.vue"
 
 /** Account sign-in. Desktop approval opens the other steps in a new tab. */
-const props = defineProps<{ account: AccountAuthentication; title: string; description?: string; registrationEnabled: boolean; newTab?: boolean; config: AuthConfig; returnTo: string; githubError?: string; googleError?: string; emailVerificationToken?: string }>()
-const emit = defineEmits<{ signedIn: [] }>()
+const props = defineProps<{ account: AccountAuthentication; title: string; description?: string; registrationEnabled: boolean; newTab?: boolean; config: AuthConfig; returnTo: string; githubError?: string; googleError?: string; emailVerificationToken?: string; onSignedIn: () => Promise<void> | void }>()
 const { t } = useI18n()
+const { required: captchaRequired, checking: checkingCaptcha, proof: captchaProof, failure: captchaFailure } = useAuthCaptcha(props.account, () => props.config.captchaEnabled)
 const email = ref("")
 const password = ref("")
 type OAuthProvider = "github" | "google"
@@ -43,7 +44,7 @@ function signInFailure(reason: unknown): string | undefined {
     if (reason.code === "invalid_credentials") return t("auth.invalidCredentials")
     if (reason.status >= 500) return t("auth.signInFailed")
   }
-  return failureMessage(reason)
+  return captchaFailure(reason) ?? failureMessage(reason)
 }
 async function run(method: "password" | "passkey", action: () => Promise<void>): Promise<void> {
   if (pending.value) return
@@ -53,15 +54,19 @@ async function run(method: "password" | "passkey", action: () => Promise<void>):
     await action()
     trackEvent("account_signed_in", { method })
     password.value = ""
-    emit("signedIn")
-  } catch (reason) { error.value = signInFailure(reason) }
-  finally { pending.value = undefined }
+    await props.onSignedIn()
+  } catch (reason) {
+    error.value = signInFailure(reason)
+    pending.value = undefined
+  }
 }
-function submit(): void { void run("password", () => props.account.login(email.value, password.value)) }
+function submit(): void {
+  void run("password", async () => props.account.login(email.value, password.value, await captchaProof("login")))
+}
 function passkey(): void {
   // The server looks up Passkeys by account, so the address comes first.
   if (!emailInput.value?.reportValidity()) return
-  void run("passkey", () => props.account.loginWithPasskey(email.value))
+  void run("passkey", async () => props.account.loginWithPasskey(email.value, await captchaProof("passkey")))
 }
 async function oauth(provider: OAuthProvider): Promise<void> {
   if (pending.value) return
@@ -75,7 +80,7 @@ async function oauth(provider: OAuthProvider): Promise<void> {
   try {
     if (props.emailVerificationToken) sessionStorage.setItem("deskfleet-email-verify-token", props.emailVerificationToken)
     const start = provider === "github" ? props.account.startGithub : props.account.startGoogle
-    const { authorizationUrl } = await start(props.returnTo, acceptedTerms.value)
+    const { authorizationUrl } = await start(props.returnTo, acceptedTerms.value, await captchaProof(provider))
     location.assign(authorizationUrl)
   } catch (reason) { sessionStorage.removeItem("deskfleet-email-verify-token"); error.value = signInFailure(reason); pending.value = undefined }
 }
@@ -105,6 +110,7 @@ async function oauth(provider: OAuthProvider): Promise<void> {
           <span class="mt-1 block text-xs leading-relaxed text-ui-text-muted">{{ t("welcome.telemetryConsentDescription") }}</span>
         </span>
       </label>
+      <p v-if="captchaRequired" role="status" class="m-0 text-xs text-ui-text-muted">{{ t(checkingCaptcha ? "auth.captchaChecking" : "auth.captchaNotice") }}</p>
       <p v-if="error" role="alert" class="m-0 text-sm text-ui-danger">{{ error }}</p>
       <UiButton type="submit" variant="primary" class="h-9 text-sm" :loading="pending === 'password'" :disabled="!!pending">{{ t("auth.signIn") }}</UiButton>
       <template v-if="passkeysAvailable() || config.githubEnabled || config.googleEnabled">

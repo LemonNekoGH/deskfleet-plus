@@ -73,7 +73,8 @@ chapter tabs show every value proposition before any interaction. They switch a
 single framed demo window. Each demo mounts on first selection and then stays
 alive, so a reader's changes survive switching. Each chapter opens on the view that
 shows its point. Agents opens on a running session at desktop widths and on a new
-session on narrow pages. The demos mount the same `App.vue`, routes, stores,
+session on narrow pages. The demo bootstrap configures its fixture adapter before
+loading application modules. The demos mount the same `App.vue`, routes, stores,
 and controls with independent browser-local sample state. They need no backend,
 agent credentials, or model calls. The trust section (`#open`) is a bento grid:
 the repository layout links to its source, and the machine and data cards
@@ -96,8 +97,8 @@ of mainland China from Cloudflare TURN. Pairwise arcs illustrate connectivity,
 not measured traffic or routes between relays.
 
 Embedded demos keep their application layout inside the preview window even on
-mobile pages. Their compact drawer mode is disabled so app panels cannot portal
-over the website navigation or installation controls. The demo runtime keeps its
+mobile pages. The narrow Team chapter uses the standalone mobile session layout
+with a full-width conversation and no sidebar drawer. The demo runtime keeps its
 own memory-history route table, because importing the product router would
 install hash history on the website. When a view the demos can reach links a
 new named route, add that route to `product-demo-runtime.ts`. Each embedded app
@@ -145,7 +146,9 @@ lives in `packages/components/src/assets/deskfleet.svg`. The shared `BrandLogo`
 component and the website display this SVG.
 `mise exec -- pnpm --filter @deskfleet/desktop icons` regenerates the application,
 tray, Web favicon, PWA installation icons, and website assets from the SVG. Native
-icons, touch icons, PWA icons, fallback favicons, and the social preview use raster formats.
+icons, touch icons, PWA icons, fallback favicons, and the social preview use raster
+formats. The macOS app icon (`apps/desktop/build/icon-mac.png`) is optically inset
+to Apple's 824-on-1024 grid so Dock and Finder size matches system defaults.
 
 ## Local Docker Compose
 
@@ -349,10 +352,10 @@ to check module initialization order as well as file sizes.
 | `mise run check-fast` | Run Rust formatting, dependency usage, Clippy, and tests |
 | `mise run test` | Run repository script, daemon, desktop, and Rust tests |
 | `mise run ci:test:platform` | Run the CI platform suites with desktop main/shared/client tests; Linux CI runs the renderer through `test` |
-| `mise run build` | Build the release server and standalone SEA daemon |
+| `mise run build` | Build the release server and standalone Bun daemon |
 | `mise run ci:build` | Build all release bundles with one shared Rust workspace build |
-| `mise run daemon:pack` | Package the daemon as a standalone SEA executable |
-| `mise run daemon:smoke` | Run the SEA release payload with no Node on PATH |
+| `mise run daemon:pack` | Package the daemon as a standalone Bun executable |
+| `mise run daemon:smoke` | Run the standalone daemon with an empty PATH |
 | `mise run native:debug` / `native:release` | Build the napi-rs addon and regenerate TypeScript declarations |
 | `mise run format` | Apply Rust formatting |
 | `mise run format-check` | Check Rust formatting |
@@ -404,29 +407,26 @@ For mise tasks that invoke installation again, set `npm_config_registry` to that
 URL in the task's environment, or update the user's pnpm registry configuration.
 
 The ACP SDK, Codex adapter, Claude Agent adapter, and Pi ACP adapter are pinned daemon
-dependencies in pnpm. The SEA build embeds those adapters. Running a session
+dependencies in pnpm. The Bun build embeds those adapters. Running a session
 still requires the installed CLI: Codex, Claude Code, Cursor (`agent acp`),
 Grok (`grok agent stdio`), Pi (`pi --mode rpc`), Oh My Pi (`omp acp`), or
 CodeBuddy Code (`codebuddy --acp`).
-`packages/dsh-runtime` owns DeepSeek Harness launch resolution, deployment, and
-smoke checks. Source daemon launches use the installed dependency tree with the
-running Node executable; Desktop development uses that same tree with Electron
-in Node mode. Neither development path needs staging.
+`packages/dsh-runtime` owns DeskFleet Desktop's bundled DeepSeek Harness
+deployment and smoke checks. Desktop development launches the installed
+dependency tree with Electron in Node mode. Source and packaged headless daemons
+use the DeepSeek Harness CLI installed on the executing machine.
 
 Production Desktop builds prepare `out/dsh` and run the package smoke check
 with Electron before Vite bundles application code. This payload contains the
 upstream package tree without a second Node executable. Staging removes source
 maps, type declarations, and debug symbols from the deployed tree; they are
 development-only and otherwise add tens of thousands of files to every install.
-Vite rebuilds do not deploy or validate the runtime. Standalone builds depend on
-`mise run dsh:stage`, which prepares `apps/daemon/dist/dsh` with the same package
-tree and a private Node executable for the SEA distribution. Staging uses the
+Vite rebuilds do not deploy or validate the runtime. Staging uses the
 dedicated deploy lockfile and trusts the graph already validated by workspace
 installation, so offline builds do not need registry metadata to resolve it
 again.
-`mise run dsh:smoke` checks the standalone payload with an empty PATH and an
-isolated home; `mise exec -- node packages/dsh-runtime/smoke.ts` checks the source
-runtime without staging. `mise run desktop:smoke-dsh` checks the installed tree
+`mise exec -- node packages/dsh-runtime/smoke.ts` checks the installed package
+tree under Node without staging. `mise run desktop:smoke-dsh` checks it
 using Electron's Node mode, including native FFI, managed subprocesses, PTYs,
 ACP initialization, session creation, and shutdown.
 After packaging, `mise run desktop:smoke-packaged-dsh` repeats those checks
@@ -454,20 +454,20 @@ for initialization checks and prompt commands.
 
 [`renovate.json`](../../renovate.json) follows
 [Heron's grouped update policy](https://github.com/minori-live/heron/blob/main/renovate.json):
-weekly dependency updates, monthly GitHub Actions updates, at most two open PRs,
+weekly dependency updates, monthly GitHub Actions and Nix flake updates, at most two open PRs,
 and a separate lockfile maintenance group. Majors and minors share the update
 group and require maintainer review; automerge is disabled. npm releases age for
 three days before ordinary updates. Lockfile maintenance delegates resolution to
 Cargo and pnpm and does not apply that release-age filter.
 
-Built-in managers cover Cargo, pnpm, Compose images, and GitHub Actions, including
+Built-in managers cover Cargo, pnpm, Compose images, Dockerfiles, Nix flakes, and GitHub Actions, including
 the mise version in `.github/actions/setup-mise`. Keep Renovate's Node, pnpm, and
 Rust `constraints` aligned with `mise.toml` so lockfile generation uses the
 repository's tools.
 The `renovate-config` manager's `tool-constraint` updates are disabled so these
 constraints change only with the locked toolchain; configuration migrations remain
 enabled.
-Node types stay on 24 because the standalone daemon's SEA build targets Node 24.
+Node types stay on 24 to match the pinned Node toolchain used for development.
 PostgreSQL major updates use a separate group and require Dependency Dashboard
 approval so the development volume migration or reset can be reviewed explicitly.
 
@@ -502,7 +502,7 @@ upstream package and patch notes.
 Toolchain and APM updates remain manual. Renovate supports mise lockfiles, but
 [lock regeneration requires host support](https://docs.renovatebot.com/modules/manager/mise/#trust-model-for-lock-file-updates)
 that repository configuration cannot grant. Enable the mise rule only after the
-host can refresh `mise.lock`, and review Node runtime/SEA target changes together.
+host can refresh `mise.lock`. Review Bun updates with the daemon packaging smoke.
 APM updates must include the installed skill tree; Renovate ignores that tree
 and leaves the pinned sources to the workflow below.
 

@@ -1,6 +1,8 @@
+import { quotaFixture } from "../../test/plan-quotas.ts"
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
-import type { AgentSnapshot, TurnLimitCode } from "../../../../../apps/daemon/src/agent-protocol.ts"
+import { HttpError } from "@deskfleet/client/http-central"
+import type { AgentSnapshot, TurnLimitCode } from "@deskfleet/protocol/agent"
 import { accountSessionKey, createAccountSession, type AccountSession } from "../../composables/useAccountSession.ts"
 import { platformClientKey, usePlatformClient } from "../../composables/usePlatformClient.ts"
 import { i18n } from "../../i18n/index.ts"
@@ -14,11 +16,11 @@ vi.mock("../../services/analytics.ts", () => ({ trackEvent: vi.fn() }))
 let view: VueWrapper | undefined
 let session: AccountSession | undefined
 beforeEach(() => vi.mocked(trackEvent).mockClear())
-afterEach(async () => { view?.unmount(); view = undefined; session?.dispose(); session = undefined; await router.replace("/") })
+afterEach(async () => { view?.unmount(); view = undefined; session?.dispose(); session = undefined; vi.unstubAllGlobals(); await router.replace("/") })
 
 async function mountWith(maxTurnsPerSession: number | null, inheritedTurnCount: number, consumed: number, turnLimitReason?: string, turnLimitCode?: TurnLimitCode, options?: { mobile?: boolean }) {
   const fake = fakeCentral()
-  fake.central.billing.mockResolvedValue({ ...billingFixture(), plan: "free", limits: { maxActiveSessions: 3, maxTurnsPerSession, maxMembers: 3, turnBytes: 0 } })
+  fake.central.billing.mockResolvedValue({ ...billingFixture(), plan: "free", limits: { ...quotaFixture.free, maxTurnsPerSession } })
   session = createAccountSession(fake.central)
   await flushPromises()
   const host = { ...usePlatformClient(), ...(options?.mobile ? { mobile: true } : {}) }
@@ -73,12 +75,15 @@ test("an unclassified admission error never implies an upgrade", async () => {
   expect(trackEvent).toHaveBeenCalledExactlyOnceWith("session_turn_allowance_viewed", { state: "blocked", used_turns: 30 })
 })
 
-test("a confirmed limit offers plans even when the billing query fails", async () => {
+test("a confirmed limit offers plans even when the billing query fails without reporting an unhandled global error", async () => {
+  const reportError = vi.fn()
+  vi.stubGlobal("reportError", reportError)
   const { fake } = await mountWith(30, 0, 30, "This Session has used its 30 Free turns.", "turn_limit_reached")
-  fake.central.billing.mockRejectedValue(new Error("Network unavailable"))
+  fake.central.billing.mockRejectedValue(new HttpError(401, "Unauthorized", undefined, "unauthorized"))
   window.dispatchEvent(new Event("focus"))
   await flushPromises()
-  expect(view!.text()).toContain("Retry it after the Team upgrades.")
+  expect(reportError).not.toHaveBeenCalled()
+  expect(view!.text()).toContain("Retry when the Team has turns available.")
   expect(view!.get("button").text()).toBe("View plans")
 })
 

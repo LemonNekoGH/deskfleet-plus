@@ -1,14 +1,14 @@
 import type { CentralBridge } from "@deskfleet/client/central-bridge"
 import { ipcRenderer } from "electron"
-import { DESKTOP_MEDIA_CHANNEL, DESKTOP_MEDIA_EVENT, isDesktopErrorReason, type DesktopEvent, type DesktopMediaResult, type IceCandidate } from "../../../../packages/client/src/desktop-media.ts"
-import type { DeskfleetDesktopApi } from "../../../../packages/client/src/desktop-api.ts"
+import { DESKTOP_MEDIA_CHANNEL, DESKTOP_MEDIA_EVENT, isDesktopErrorReason, type DesktopEvent, type DesktopMediaResult, type IceCandidate } from "@deskfleet/client/desktop-media"
+import type { DeskfleetDesktopApi } from "@deskfleet/client/desktop-api"
 import type { DesktopPreloadApi } from "../shared/preload-api.ts"
-import { DEFAULT_LOCALE, isAppLocale, LOCALE_ARGUMENT_PREFIX } from "../../../../packages/client/src/i18n.ts"
-import { TERMINAL_SESSION_EVENT, type TerminalSessionEvent } from "../../../../packages/client/src/terminal.ts"
-import { CATALOG_CHANGED_EVENT } from "../../../../packages/client/src/catalog.ts"
-import { PROVIDERS_CHANGED_EVENT } from "../../../../packages/client/src/providers.ts"
-import type { LocalAgentState } from "../../../../packages/client/src/local-agent.ts"
-import { SETTINGS_CHANNEL, SETTINGS_CHANGED_EVENT, type SettingsResult } from "../../../../packages/client/src/settings.ts"
+import { DEFAULT_LOCALE, isAppLocale, LOCALE_ARGUMENT_PREFIX } from "@deskfleet/client/i18n"
+import { TERMINAL_SESSION_EVENT, type TerminalSessionEvent } from "@deskfleet/client/terminal"
+import { CATALOG_CHANGED_EVENT } from "@deskfleet/client/catalog"
+import { PROVIDERS_CHANGED_EVENT } from "@deskfleet/client/providers"
+import type { LocalAgentState } from "@deskfleet/client/local-agent"
+import { SETTINGS_CHANNEL, SETTINGS_CHANGED_EVENT, type SettingsResult } from "@deskfleet/client/settings"
 import { filesApi } from "./files.ts"
 import { onboardingApi } from "./onboarding.ts"
 import { appearanceApi } from "./appearance.ts"
@@ -38,7 +38,7 @@ async function invokeDesktop<T>(method: string, params?: unknown): Promise<T> {
   return result.value
 }
 
-async function invokeSettings<T>(method: "get" | "setLocalAgentEnabled" | "getLaunchAtStartup" | "setLaunchAtStartup" | "getKeepAwake" | "setKeepAwake" | "getAutoDownloadUpdates" | "setAutoDownloadUpdates" | "setPauseUpdatesOnMetered" | "getWorktreeRoot" | "setWorktreeRoot" | "chooseWorktreeRoot" | "getWorktreePreferences" | "setWorktreePreferences" | "getNotifications" | "setNotifications" | "getNotificationPermission" | "requestNotificationPermission" | "getRemoteAgentSettings" | "setRemoteAgentSettings", value?: unknown): Promise<T> {
+async function invokeSettings<T>(method: "get" | "setLocalAgentEnabled" | "getLaunchAtStartup" | "setLaunchAtStartup" | "getKeepAwake" | "setKeepAwake" | "getLinuxKeyring" | "setLinuxKeyring" | "getAutoDownloadUpdates" | "setAutoDownloadUpdates" | "setPauseUpdatesOnMetered" | "setInstallUpdatesOnQuit" | "getWorktreeRoot" | "setWorktreeRoot" | "chooseWorktreeRoot" | "getWorktreePreferences" | "setWorktreePreferences" | "getNotifications" | "setNotifications" | "getNotificationPermission" | "requestNotificationPermission" | "getRemoteAgentSettings" | "setRemoteAgentSettings", value?: unknown): Promise<T> {
   const result = await ipcRenderer.invoke(SETTINGS_CHANNEL, method, value) as SettingsResult<T>
   if (!result.ok) throw new Error(result.error)
   return result.value
@@ -84,9 +84,14 @@ return {
     setLaunchAtStartup: (enabled) => invokeSettings("setLaunchAtStartup", enabled),
     getKeepAwake: () => invokeSettings("getKeepAwake"),
     setKeepAwake: (enabled) => invokeSettings("setKeepAwake", enabled),
+    ...(process.platform === "linux" ? {
+      getLinuxKeyring: () => invokeSettings("getLinuxKeyring"),
+      setLinuxKeyring: (useSystemKeyring: boolean) => invokeSettings("setLinuxKeyring", useSystemKeyring),
+    } : {}),
     getAutoDownloadUpdates: () => invokeSettings("getAutoDownloadUpdates"),
     setAutoDownloadUpdates: (enabled) => invokeSettings("setAutoDownloadUpdates", enabled),
     setPauseUpdatesOnMetered: (enabled) => invokeSettings("setPauseUpdatesOnMetered", enabled),
+    setInstallUpdatesOnQuit: (enabled) => invokeSettings("setInstallUpdatesOnQuit", enabled),
     getWorktreeRoot: () => invokeSettings("getWorktreeRoot"),
     getWorktreePreferences: () => invokeSettings("getWorktreePreferences"),
     setWorktreePreferences: (settings) => invokeSettings("setWorktreePreferences", settings),

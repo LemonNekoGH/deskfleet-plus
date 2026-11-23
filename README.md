@@ -43,7 +43,7 @@
 > [!TIP]
 > **Quick Install (Desktop App)**
 >
-> On **macOS** (Apple Silicon) via [Homebrew](https://brew.sh/):
+> On **macOS** (Apple Silicon and Intel) via [Homebrew](https://brew.sh/):
 > ```sh
 > brew install --cask yet-another-ai/tap/deskfleet
 > ```
@@ -59,6 +59,8 @@
 > ```
 >
 > Prebuilt installers for **macOS**, **Windows**, and **Linux** are available on [GitHub Releases](https://github.com/yet-another-ai/deskfleet/releases).
+>
+> Homebrew Intel desktop support and the `deskfleet-daemon` formula land with the companion tap packaging in [`yet-another-ai/homebrew-tap#8`](https://github.com/yet-another-ai/homebrew-tap/pull/8). Merge that tap PR before relying on those install paths; the Apple Silicon desktop cask remains available on the published tap today.
 
 ## Why DeskFleet?
 
@@ -101,7 +103,8 @@ DeskFleet supervises any ACP-compatible agent installed on an enrolled machine:
 
 | Platform | Architecture | Desktop App | Headless Daemon | Web Client (PWA) | Packages & Installers |
 | --- | --- | :---: | :---: | :---: | --- |
-| **macOS** | Apple Silicon (`arm64`) | ✅ | ✅ | ✅ | Homebrew Cask, `.dmg`, `.tar.gz`, Nix (nix-darwin) |
+| **macOS** | Apple Silicon (`arm64`) | ✅ | ✅ | ✅ | Homebrew Cask / Formula, `.dmg`, `.tar.gz`, Nix (nix-darwin) |
+| **macOS** | Intel (`x64`) | ✅ | ✅ | ✅ | Homebrew Cask / Formula, `.dmg`, `.tar.gz`, Nix (nix-darwin) |
 | **Windows** | `x64` | ✅ | ✅ | ✅ | `.exe` installer, standalone `.tar.gz` |
 | **Linux** | `x86_64`, `arm64` | ✅ | ✅ | ✅ | AppImage, `.deb`, `.rpm`, `.tar.gz`, [AUR (`deskfleet-bin`)](https://aur.archlinux.org/packages/deskfleet-bin), [Nix flake](agents/docs/ci.md#nix-distribution) |
 
@@ -111,11 +114,12 @@ DeskFleet supervises any ACP-compatible agent installed on an enrolled machine:
 
 The Electron desktop app includes an embedded machine daemon in its main process. Closing the window keeps DeskFleet in the system tray so active sessions, terminals, and scheduled tasks continue running until you quit the app.
 
-- **macOS (Apple Silicon)**:
+- **macOS (Apple Silicon and Intel)** via Homebrew:
   ```sh
   brew install --cask yet-another-ai/tap/deskfleet
   ```
-- **macOS with nix-darwin (Apple Silicon)**: add the release flake as an input, apply its `overlays.default`, and include `pkgs.deskfleet` in `environment.systemPackages`. nix-darwin installs the signed app bundle under `/Applications/Nix Apps` and owns upgrades; the Electron updater stays disabled. See [Nix distribution](agents/docs/ci.md#nix-distribution) for the flake input.
+  Intel desktop cask support requires the companion tap packaging in [`yet-another-ai/homebrew-tap#8`](https://github.com/yet-another-ai/homebrew-tap/pull/8). Merge that tap PR before relying on Intel Homebrew installs; the Apple Silicon cask remains available on the published tap today.
+- **macOS with nix-darwin (Apple Silicon and Intel)**: add the release flake as an input, apply its `overlays.default`, and include `pkgs.deskfleet` in `environment.systemPackages`. nix-darwin installs the signed app bundle under `/Applications/Nix Apps` and owns upgrades; the Electron updater stays disabled. See [Nix distribution](agents/docs/ci.md#nix-distribution) for the flake input.
 - **Arch Linux**:
   ```sh
   yay -S deskfleet-bin
@@ -129,24 +133,33 @@ The Electron desktop app includes an embedded machine daemon in its main process
   ```
   Your package manager owns upgrades. The distribution packages do not use the
   AppImage self-updater.
-- **Linux with Nix** (`x86_64` or `aarch64` with flakes enabled; replace `<VERSION>` with the release version without `v`). The same release flake also exposes the macOS app for nix-darwin:
+- **Linux with Nix** (`x86_64` or `aarch64` with flakes enabled; replace `<VERSION>` with the release version without `v`). The same release flake also exposes Apple Silicon and Intel macOS apps for nix-darwin:
   ```sh
   nix profile add 'https://github.com/yet-another-ai/deskfleet/releases/download/v<VERSION>/deskfleet-nix.tar.gz'
   ```
   To try it without adding it to your profile, use `nix run` with the same URL. See [Nix distribution](agents/docs/ci.md#nix-distribution) for packaging details.
-- **Direct Downloads**: Download `.dmg` (macOS), `.exe` (Windows), or `.AppImage` / `.deb` / `.rpm` / `.tar.gz` (Linux) from [GitHub Releases](https://github.com/yet-another-ai/deskfleet/releases).
+- **Direct Downloads**: Download `-mac-arm64.dmg` for Apple Silicon, `-mac-x64.dmg` for Intel Macs, `.exe` for Windows, or `.AppImage` / `.deb` / `.rpm` / `.tar.gz` for Linux from [GitHub Releases](https://github.com/yet-another-ai/deskfleet/releases).
 
 ### Headless Machine Daemon
 
-For remote workstations, VMs, and build servers without a desktop session, DeskFleet packages `@deskfleet/daemon` as a standalone Node.js Single Executable Application (`deskfleet-daemon`, or `deskfleet-daemon.exe` on Windows).
+For remote workstations, VMs, and build servers without a desktop session, DeskFleet packages `@deskfleet/daemon` as a standalone Bun executable (`deskfleet-daemon`, or `deskfleet-daemon.exe` on Windows).
 
-1. Download the daemon archive for your platform from [GitHub Releases](https://github.com/yet-another-ai/deskfleet/releases) (or build it from source with `mise run daemon:pack`).
+On **macOS** (Apple Silicon and Intel), after the companion tap packaging in [`yet-another-ai/homebrew-tap#8`](https://github.com/yet-another-ai/homebrew-tap/pull/8) merges, install the daemon-only formula and manage it with Homebrew services:
+
+```sh
+brew install yet-another-ai/tap/deskfleet-daemon
+brew services start yet-another-ai/tap/deskfleet-daemon
+```
+
+The formula installs only `deskfleet-daemon` from the published `deskfleet-macos-{arm64,x64}.tar.gz` archives (not `deskfleet-server`). Enroll the machine before relying on the service; see the [Daemon Guide](apps/daemon/README.md).
+
+1. Download the daemon archive for your platform from [GitHub Releases](https://github.com/yet-another-ai/deskfleet/releases) (or build it from source with `mise run daemon:pack`), or use the Homebrew formula above on macOS once the tap PR is merged.
 2. Prepare enrollment on the headless machine for your backend and team, paste the bundle into **Add machine → Another machine** in the desktop or web client, and import the issued credential.
 3. See the [Daemon Guide](apps/daemon/README.md) for the complete enrollment workflow, CLI flags, and storage layout.
 
 ## Architecture
 
-DeskFleet is a Rust and TypeScript monorepo. The central control plane is built with **Rust** and **Actix Web** backed by **PostgreSQL**. Each machine runs a **TypeScript** daemon (inside Electron's main process or as a standalone SEA binary) backed by local **SQLite** and **Rust native libraries** via **napi-rs** for WebRTC transport, PTY terminals, screen capture, hardware video encoding, and input forwarding. The **Electron** and **Web** clients share a **Vue** component library.
+DeskFleet is a Rust and TypeScript monorepo. The central control plane is built with **Rust** and **Actix Web** backed by **PostgreSQL**. Each machine runs a **TypeScript** daemon (inside Electron's main process or as a standalone Bun executable) backed by local **SQLite** and **Rust native libraries** via **napi-rs** for WebRTC transport, PTY terminals, screen capture, hardware video encoding, and input forwarding. The **Electron** and **Web** clients share a **Vue** component library.
 
 ```mermaid
 flowchart LR
@@ -165,10 +178,11 @@ flowchart LR
 | --- | --- |
 | [`apps/desktop`](apps/desktop) | Electron desktop client hosting the local machine daemon in its main process |
 | [`apps/web`](apps/web) | Installable PWA web client sharing UI components with the desktop app |
-| [`apps/daemon`](apps/daemon) | Machine daemon library and standalone Node.js SEA executable |
+| [`apps/daemon`](apps/daemon) | Machine daemon library and standalone Bun executable |
 | [`apps/server`](apps/server) | Actix Web control-plane API, authentication, signaling, and static web host |
 | [`apps/desktop-service`](apps/desktop-service) | Native desktop service helper |
 | [`packages/components`](packages/components) | Shared Vue UI components, styles, and localization catalogs (`en-US`, `zh-CN`, `ja-JP`) |
+| [`packages/protocol`](packages/protocol) | Platform-neutral wire contracts and validators shared by the daemon, agents, and clients |
 | [`packages/client`](packages/client) | Shared client stores, platform contracts, and HTTPS/WebSocket/WebRTC adapters |
 | [`packages/mcp`](packages/mcp) | Built-in `@deskfleet/mcp` stdio server injected into managed ACP sessions |
 | [`crates/*`](crates) | Rust workspace crates for data models, storage, protocol contracts, WebRTC, PTY, and desktop media |
@@ -184,7 +198,7 @@ flowchart LR
 | `deskfleet-store` | [`crates/store`](crates/store) | SeaORM entities and transactional local SQLite workspace/worktree catalog persistence |
 | `deskfleet-control-store` | [`crates/control-store`](crates/control-store) | PostgreSQL identities, teams, machines, authorization, and central replicas |
 | `deskfleet-migration` | [`crates/migration`](crates/migration) | Catalog schema migrations and optional migration CLI |
-| `deskfleet-protocol` | [`crates/protocol`](crates/protocol) | Shared Rust/TypeScript wire contracts and protocol version |
+| `deskfleet-protocol` | [`crates/protocol`](crates/protocol) | Central Rust wire contracts and protocol version; generates `@deskfleet/protocol/generated/central-control` |
 | `deskfleet-native` | [`crates/native`](crates/native) | Platform capabilities (WebRTC peers, PTY terminals, desktop capture/media) independent of Node.js |
 | `deskfleet-node` | [`crates/node`](crates/node) | Thin `napi-rs` bindings exposing `deskfleet-native` and local catalog persistence as `@deskfleet/native` |
 | `deskfleet-desktop-viewer` | [`crates/desktop-viewer`](crates/desktop-viewer) | Independent native remote desktop viewer window (`winit` / `wgpu`) |
@@ -241,7 +255,7 @@ Run any of the following in another terminal from the repository root:
 | --- | --- | --- |
 | **Desktop app (Electron)** | `mise run desktop:dev` | Starts Electron with hot reload. Use the system tray menu to quit. |
 | **Standalone daemon (source)** | `mise run daemon:dev` | Runs `@deskfleet/daemon` in the foreground and prints its loopback health address. |
-| **Standalone daemon (SEA binary)** | `mise run daemon:pack && mise run daemon:smoke` | Packages `apps/daemon/dist/deskfleet-daemon` (`.exe` on Windows) and smoke-tests it. |
+| **Standalone daemon (Bun executable)** | `mise run daemon:pack && mise run daemon:smoke` | Packages `apps/daemon/dist/deskfleet-daemon` (`.exe` on Windows) and smoke-tests it. |
 | **Product website & demos** | `mise run docs:dev` | Starts VitePress at `http://127.0.0.1:5175/` with interactive browser-local demos (`en`, `zh`, `ja`). Build static output to `docs/.vitepress/dist/` with `mise run docs:build`. |
 
 ### 5. Run Checks & Restore Agent Skills
@@ -280,6 +294,12 @@ mise run skills:install
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow guidelines and instructions on signing the [Contributor License Agreement](CLA.md).
+
+## Contributors
+
+<a href="https://github.com/yet-another-ai/deskfleet/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=yet-another-ai/deskfleet" />
+</a>
 
 ## License
 

@@ -2,7 +2,7 @@
 import { computed } from "vue"
 import { useAsyncState } from "@vueuse/core"
 import { useI18n } from "vue-i18n"
-import type { RemoteAgentSettings } from "../../../../client/src/settings.ts"
+import type { RemoteAgentSettings } from "@deskfleet/client/settings"
 import { usePlatformClient } from "../../composables/usePlatformClient.ts"
 import UiButton from "../common/UiButton.vue"
 import UiSwitch from "../common/UiSwitch.vue"
@@ -16,7 +16,7 @@ const { state, isLoading, error, executeImmediate } = useAsyncState(
   { resetOnExecute: false },
 )
 const requestError = computed(() => error.value instanceof Error ? error.value.message : error.value ? String(error.value) : null)
-const permissions = ["allowRead", "allowOperate", "allowSessions", "allowWorkspaces"] as const
+const permissions = ["allowRead", "allowOperate", "allowSessions", "allowWorkspaces", "allowSuperAgent", "allowLocalCrossWorkspace"] as const
 
 function save(permission: keyof RemoteAgentSettings, enabled: boolean) {
   if (state.value && !isLoading.value) void executeImmediate({ ...state.value, [permission]: enabled })

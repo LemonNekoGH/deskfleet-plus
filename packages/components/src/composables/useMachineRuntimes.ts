@@ -6,6 +6,8 @@ import type { DeskfleetDesktopApi } from "@deskfleet/client/desktop-api"
 import { remoteMachineClient } from "@deskfleet/client/remote"
 import { accountSessionKey, type AccountSession } from "./useAccountSession.ts"
 import { platformClientKey } from "./usePlatformClient.ts"
+import { createSidebarFilter, type SidebarFilterState } from "./useSidebarFilter.ts"
+import { createSidebarOrder, type SidebarOrder } from "./useSidebarOrder.ts"
 import { i18n } from "../i18n/index.ts"
 import { router } from "../router/index.ts"
 import { appearanceStoreKey, type useAppearanceStore } from "../stores/appearance.ts"
@@ -26,6 +28,8 @@ export interface MachineRuntime {
 export interface MachineRuntimes {
   opened: Map<string, MachineRuntime>
   sidebarScrollTop: number
+  sidebarFilter: SidebarFilterState
+  sidebarOrder: SidebarOrder
   open(machine: Machine): MachineRuntime
 }
 
@@ -41,17 +45,22 @@ export function createMachineRuntimes(
   batteries: MachineBatteriesStore,
 ): MachineRuntimes {
   const opened = shallowReactive(new Map<string, MachineRuntime>())
+  const sidebarFilter = createSidebarFilter()
   function release(id: string): void {
     const runtime = opened.get(id)
     opened.delete(id)
+    sidebarFilter.counts.delete(id)
     runtime?.dispose()
   }
   const identity = computed(() => JSON.stringify([session.account.value.serverUrl, session.account.value.user?.id, session.teamId.value]))
+  const sidebarOrder = createSidebarOrder(identity)
   const owner = computed(() => JSON.stringify([session.account.value.serverUrl, session.account.value.user?.id]))
   watch(owner, (_, previous) => { void clearConversationOwner(previous) })
   watch(identity, () => {
     for (const id of opened.keys()) release(id)
     runtimes.sidebarScrollTop = 0
+    sidebarFilter.filter.value = "all"
+    sidebarFilter.counts.clear()
   }, { flush: "sync" })
   watch(() => [session.machines.value.map(machine => ({ ...machine })), session.machineRosterVersion.value] as const, ([machines, version], [, previousVersion]) => {
     for (const [id, runtime] of opened) {
@@ -65,6 +74,8 @@ export function createMachineRuntimes(
   const runtimes: MachineRuntimes = {
     opened,
     sidebarScrollTop: 0,
+    sidebarFilter,
+    sidebarOrder,
     open(machine) {
       const existing = opened.get(machine.id)
       if (existing) return existing

@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { createPinia, disposePinia, setActivePinia } from "pinia"
 import { computed, ref } from "vue"
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest"
-import type { FileResourceRequest, FilesApi } from "../../../../client/src/files.ts"
+import type { FileResourceRequest, FilesApi } from "@deskfleet/client/files"
 import { i18n } from "../../i18n/index.ts"
 import { router } from "../../router/index.ts"
 import { agentResourceContextKey, type AgentResourceContext } from "../../services/agent-resources.ts"
@@ -209,6 +209,19 @@ test("Codex Office output citations open scoped remote resources and allow binar
   await button.trigger("click")
   expect(download).toHaveBeenCalledOnce()
   expect(new Uint8Array(await (create.mock.calls[0]![0] as Blob).arrayBuffer())).toEqual(data)
+})
+
+test("locates a remounted local image by its file URI before the new blob loads", async () => {
+  const pending = Promise.withResolvers<{ data: Uint8Array; name: string; mimeType: string }>()
+  const view = render({ readResource: vi.fn(() => pending.promise) }, "![Chart](chart.png)")
+  await flushPromises()
+  const anchor = view.get('[data-preview="chart.png"]').element
+  expect(performPreviewLocateDom({ id: 1, itemId: "chart.png", content: "blob:previous-mount" })).toBe(true)
+  expect(anchor.getAttribute("data-preview-located")).toBe("true")
+  pending.resolve({ data: new Uint8Array([1]), name: "chart.png", mimeType: "image/png" })
+  await flushPromises()
+  expect(view.get('[data-preview="chart.png"]').element).toBe(anchor)
+  expect(anchor.querySelector("img")).not.toBeNull()
 })
 
 test("late image completion after unmount creates no retained URL", async () => {

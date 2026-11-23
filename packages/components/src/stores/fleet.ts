@@ -1,9 +1,9 @@
 import { usePlatformClient } from "../composables/usePlatformClient.ts"
 import { defineStore } from "pinia"
 import { computed, hasInjectionContext, onScopeDispose, ref } from "vue"
-import type { CatalogDirectory, CatalogSnapshot, CatalogWorktree, CatalogWorkspace } from "../../../client/src/catalog.ts"
-import type { LocalDesktopTarget } from "../../../client/src/desktop-media.ts"
-import type { AgentSessionRecord } from "../../../../apps/daemon/src/agent-protocol.ts"
+import type { CatalogDirectory, CatalogSnapshot, CatalogWorktree, CatalogWorkspace } from "@deskfleet/client/catalog"
+import type { LocalDesktopTarget } from "@deskfleet/client/desktop-media"
+import type { AgentSessionRecord } from "@deskfleet/protocol/agent"
 import type { AgentSessionSummary, MachineSummary, TerminalSessionSummary, WorkspaceSummary, WorktreeSummary } from "./fleet-types.ts"
 import { useAccountSession } from "../composables/useAccountSession.ts"
 import { captureAnalyticsContext } from "../services/analytics.ts"
@@ -128,6 +128,7 @@ export const useFleetStore = defineStore("fleet", () => {
         title: metadata.title, provider: provider?.name, providerIcon: provider?.icon,
         providerTemplate: provider?.template, providerUnavailable: providers.loaded && !provider,
         context: metadata.context, archiveState: metadata.archiveState,
+        lastMessageAt: metadata.lastMessageAt, createdAt: metadata.createdAt,
         lastCompletedSeq: metadata.lastCompletedSeq, lastReadSeq: metadata.lastReadSeq,
       })
     }
@@ -150,6 +151,7 @@ export const useFleetStore = defineStore("fleet", () => {
         title: metadata.title, provider: provider?.name, providerIcon: provider?.icon,
         providerTemplate: provider?.template, providerUnavailable: providers.loaded && !provider,
         context: metadata.context, archiveState: metadata.archiveState,
+        lastMessageAt: metadata.lastMessageAt, createdAt: metadata.createdAt,
         lastCompletedSeq: metadata.lastCompletedSeq, lastReadSeq: metadata.lastReadSeq,
       })
     }

@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, Notification, type WebContents } from "electron"
 import { checkNotificationAccess, requestNotificationAccess } from "@deskfleet/native"
-import type { LocalAgentState } from "../../../../packages/client/src/local-agent.ts"
-import { SETTINGS_CHANNEL, SETTINGS_CHANGED_EVENT } from "../../../../packages/client/src/settings.ts"
+import type { LocalAgentState } from "@deskfleet/client/local-agent"
+import { SETTINGS_CHANNEL, SETTINGS_CHANGED_EVENT } from "@deskfleet/client/settings"
 import { isDesktopMediaSender } from "./desktop-media.ts"
 import { getLaunchAtStartup, setLaunchAtStartup } from "./launch-at-startup.ts"
 import type { KeepAwakeController } from "./keep-awake.ts"
@@ -10,8 +10,9 @@ import { validateNotificationSettings, type NotificationSettingsController } fro
 import type { UpdateSettingsController } from "./update-settings.ts"
 import type { WorktreeRootSettingsController } from "./worktree-root-settings.ts"
 import type { RemoteAgentSettingsController } from "./remote-agent-settings.ts"
-import { remoteAgentSettings } from "../../../daemon/src/remote-agent-settings.ts"
-import { validateWorktreePreferences } from "../../../daemon/src/worktree-preferences.ts"
+import type { LinuxKeyringSettingsController } from "./linux-keyring-settings.ts"
+import { remoteAgentSettings } from "@deskfleet/protocol/remote-agent-settings"
+import { validateWorktreePreferences } from "@deskfleet/protocol/worktree-preferences"
 import { t } from "./i18n.ts"
 
 const renderers = new Set<WebContents>()
@@ -33,8 +34,9 @@ export function installSettings(
   keepAwake: KeepAwakeController,
   notifications: NotificationSettingsController,
   worktrees: WorktreeRootSettingsController,
-  updates?: Pick<UpdateSettingsController, "get" | "setEnabled" | "setPauseOnMetered">,
+  updates?: Pick<UpdateSettingsController, "get" | "setEnabled" | "setPauseOnMetered" | "setInstallOnQuit">,
   remoteAgents?: RemoteAgentSettingsController,
+  linuxKeyring?: Pick<LinuxKeyringSettingsController, "get" | "setUseSystemKeyring">,
 ): void {
   ipcMain.handle(SETTINGS_CHANNEL, async (event, method: unknown, enabled: unknown) => {
     if (!renderers.has(event.sender) || !isDesktopMediaSender(event)) {
@@ -60,6 +62,13 @@ export function installSettings(
         case "setKeepAwake":
           if (typeof enabled !== "boolean") throw new Error("Keep Awake setting must be a boolean")
           return { ok: true, value: keepAwake.setEnabled(enabled) }
+        case "getLinuxKeyring":
+          if (!linuxKeyring) throw new Error("Linux keyring settings are unavailable")
+          return { ok: true, value: linuxKeyring.get() }
+        case "setLinuxKeyring":
+          if (typeof enabled !== "boolean") throw new Error("Linux keyring setting must be a boolean")
+          if (!linuxKeyring) throw new Error("Linux keyring settings are unavailable")
+          return { ok: true, value: linuxKeyring.setUseSystemKeyring(enabled) }
         case "getAutoDownloadUpdates":
           if (!updates) throw new Error("Automatic update settings are unavailable")
           return { ok: true, value: updates.get() }
@@ -71,6 +80,10 @@ export function installSettings(
           if (typeof enabled !== "boolean") throw new Error("Metered network update setting must be a boolean")
           if (!updates) throw new Error("Automatic update settings are unavailable")
           return { ok: true, value: updates.setPauseOnMetered(enabled) }
+        case "setInstallUpdatesOnQuit":
+          if (typeof enabled !== "boolean") throw new Error("Install updates on quit setting must be a boolean")
+          if (!updates) throw new Error("Automatic update settings are unavailable")
+          return { ok: true, value: updates.setInstallOnQuit(enabled) }
         case "getWorktreeRoot": return { ok: true, value: await worktrees.get() }
         case "getWorktreePreferences": return { ok: true, value: await worktrees.getPreferences() }
         case "setWorktreePreferences":

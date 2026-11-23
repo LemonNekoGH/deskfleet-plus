@@ -46,10 +46,12 @@ impl Sender {
             let mut pending = self.pending.lock().map_err(|_| "input queue poisoned")?;
             if matches!(event, InputEvent::ReleaseAll) {
                 pending.clear();
-            } else if matches!(event, InputEvent::PointerMove { .. })
-                && matches!(pending.back(), Some(InputEvent::PointerMove { .. }))
+            } else if (matches!(event, InputEvent::PointerMove { .. })
+                && matches!(pending.back(), Some(InputEvent::PointerMove { .. })))
+                || (matches!(event, InputEvent::Clipboard { .. })
+                    && matches!(pending.back(), Some(InputEvent::Clipboard { .. })))
             {
-                // Never move pointer updates across a key, button, or wheel.
+                // Never move pointer or clipboard updates across a key, button, or wheel.
                 pending.pop_back();
             } else if pending.len() == CAPACITY {
                 // The ordered channel delivers any in-flight event first.
@@ -65,6 +67,21 @@ impl Sender {
         self.wake()
     }
 
+    /// A deliberate chord or paste releases held input in order, after prior
+    /// keystrokes. A focus-loss release through `send` still discards stale work.
+    #[cfg(any(target_os = "ios", target_os = "android", test))]
+    pub(crate) fn send_sequence(&self, events: Vec<InputEvent>) -> Result<(), Error> {
+        let mut pending = self.pending.lock().map_err(|_| "input queue poisoned")?;
+        if events.len() > CAPACITY - pending.len() {
+            pending.clear();
+            pending.push_back(InputEvent::ReleaseAll);
+        } else {
+            pending.extend(events);
+        }
+        drop(pending);
+        self.wake()
+    }
+
     fn wake(&self) -> Result<(), Error> {
         match self.ready.try_send(()) {
             Ok(()) | Err(mpsc::error::TrySendError::Full(())) => Ok(()),
@@ -76,6 +93,15 @@ impl Sender {
 }
 
 impl Receiver {
+    /// Settings and local pause transitions must not replay queued gestures.
+    pub(crate) fn clear(&mut self) -> Result<(), Error> {
+        self.pending
+            .lock()
+            .map_err(|_| "input queue poisoned")?
+            .clear();
+        Ok(())
+    }
+
     pub(crate) async fn recv(&mut self) -> Result<Option<InputEvent>, Error> {
         loop {
             let event = self
@@ -167,6 +193,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_and_virtual_chords_keep_prior_keystrokes_in_order() {
+        let (sender, mut receiver) = channel();
+        let strokes = [key("Enter"), InputEvent::ReleaseAll, key("KeyB")];
+        sender.send(strokes[0].clone()).unwrap();
+        sender.send_sequence(strokes[1..].to_vec()).unwrap();
+        drop(sender);
+        for event in strokes {
+            assert_eq!(receiver.recv().await.unwrap(), Some(event));
+        }
+    }
+
+    #[tokio::test]
+    async fn overflow_discards_an_entire_virtual_chord() {
+        let (sender, mut receiver) = channel();
+        for _ in 1..CAPACITY {
+            sender.send(button()).unwrap();
+        }
+        let chord = crate::nsh_keyboard::chord_events(&["ControlLeft", "KeyC"]);
+        sender.send_sequence(chord).unwrap();
+        drop(sender);
+        assert_eq!(receiver.recv().await.unwrap(), Some(InputEvent::ReleaseAll));
+        assert_eq!(receiver.recv().await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn focus_release_discards_pending_presses_before_fresh_input() {
         let (sender, mut receiver) = channel();
         sender.send(key("KeyA")).unwrap();
@@ -176,6 +227,18 @@ mod tests {
         drop(sender);
         assert_eq!(receiver.recv().await.unwrap(), Some(InputEvent::ReleaseAll));
         assert_eq!(receiver.recv().await.unwrap(), Some(position(0.8)));
+        assert_eq!(receiver.recv().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn pause_or_peer_replacement_discards_queued_presses() {
+        let (sender, mut receiver) = channel();
+        sender.send(key("ControlLeft")).unwrap();
+        sender.send(button()).unwrap();
+        receiver.clear().unwrap();
+        sender.send(key("KeyB")).unwrap();
+        drop(sender);
+        assert_eq!(receiver.recv().await.unwrap(), Some(key("KeyB")));
         assert_eq!(receiver.recv().await.unwrap(), None);
     }
 

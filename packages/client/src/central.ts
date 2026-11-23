@@ -1,16 +1,17 @@
 import type { RelayDeniedReason } from "./relay.ts"
 import type { PeerTelemetryEvent } from "./peer-telemetry.ts"
 import type { ProviderDisplaySnapshot } from "./providers.ts"
-import type { BillingInterval, TeamBilling, AdminTeamBillingPage, AdminTeamBillingQuery } from "./billing.ts"
+import type { BillingInterval, BillingPlan, CreditRates, HostedPlan, PlanQuota, TeamBilling, AdminTeamBillingPage, AdminTeamBillingQuery } from "./billing.ts"
 import type { AccountDeletionRequestPage, AccountDeletionRequestQuery } from "./account-deletion.ts"
 import type { AiUsageQuery, TeamAiUsage, TeamAiUsageSessions } from "./ai-usage.ts"
+import type { RegisterSuperAgentMachineSessionInput, SuperAgentConfig, SuperAgentConfigUpdate, SuperAgentHistory, SuperAgentMessageContent, SuperAgentSession, SuperAgentUsage } from "./super-agent.ts"
 import type { SiteUsagePeriod, SiteUsageTrends } from "./site-usage.ts"
 import type { ScheduleSnapshot, SearchPage, SearchQuery } from "./search.ts"
 import type { CatalogSnapshot } from "./catalog.ts"
-import type { AgentEvent, AgentSnapshot } from "../../../apps/daemon/src/agent-protocol.ts"
+import type { AgentEvent, AgentSnapshot } from "@deskfleet/protocol/agent"
 import type { DesktopEvent, DesktopStart, IceCandidate, VideoCodec } from "./desktop-media.ts"
 import type { NotificationSettings } from "./settings.ts"
-import type { User, Team as WireTeam, Machine as WireMachine, PeerAuthorization, ControlMessage, SiteSettings, TelemetryConsentUpdate, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, TeamTurnSettings, TeamTurnSettingsUpdate } from "../../../crates/protocol/control.ts"
+import type { User, Team as WireTeam, Machine as WireMachine, PeerAuthorization, ControlMessage, SiteSettings, TelemetryConsentUpdate, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, TeamTurnSettings, TeamTurnSettingsUpdate } from "@deskfleet/protocol/generated/central-control"
 
 export type PushChannel = "apns" | "fcm"
 export interface PushSubscriptionInput {
@@ -42,7 +43,7 @@ export interface GithubRepositoryItemsQuery {
 }
 export interface GithubRepositoryItemsPage { items: GithubRepositoryItem[]; nextCursor: string | null }
 export interface AccountState { serverUrl: string; user?: AccountUser; siteAdmin: boolean }
-export type { SiteSettings, MarketingAttribution, TelemetryConsentUpdate, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, TeamTurnAvailability, TeamTurnSettings, TeamTurnSettingsUpdate } from "../../../crates/protocol/control.ts"
+export type { SiteSettings, MarketingAttribution, TelemetryConsentUpdate, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, TeamTurnAvailability, TeamTurnSettings, TeamTurnSettingsUpdate } from "@deskfleet/protocol/generated/central-control"
 export type TeamRole = "owner" | "admin" | "member"
 export type Team = Omit<WireTeam, "role"> & { role: TeamRole }
 export interface TeamMember { userId: string; name: string; email?: string | null; role: TeamRole }
@@ -77,8 +78,14 @@ export type CentralEvent =
   | { type: "connection"; connected: boolean }
   | { type: "accountChanged" }
 
+export type AdminPlanQuota = PlanQuota & { plan: BillingPlan }
+
 /** Site management is available to the Web host, separately from the desktop bridge. */
 export interface SiteAdministrationApi {
+  creditRates(): Promise<CreditRates>
+  updateCreditRates(rates: CreditRates): Promise<CreditRates>
+  planQuotas(): Promise<AdminPlanQuota[]>
+  updatePlanQuota(plan: HostedPlan, limits: PlanQuota): Promise<AdminPlanQuota>
   usageTrends(period: SiteUsagePeriod): Promise<SiteUsageTrends>
   siteSettings(): Promise<SiteSettings>
   updateSiteSettings(settings: SiteSettings): Promise<SiteSettings>
@@ -90,8 +97,9 @@ export interface SiteAdministrationApi {
   setManualGrant(teamId: string, plan: "free" | "go" | "pro" | "enterprise" | null, expiresAt: number | null, reason: string): Promise<void>
   deletionRequests(query?: AccountDeletionRequestQuery): Promise<AccountDeletionRequestPage>
   reviewDeletionRequest(id: string, approve: boolean, note?: string): Promise<void>
-  registrationPolicy(): Promise<{ registrationEnabled: boolean }>
+  registrationPolicy(): Promise<import("./account-security.ts").PublicAuthenticationPolicy>
   updateRegistration(enabled: boolean): Promise<void>
+  updateCaptcha(enabled: boolean): Promise<void>
   users(query: string): Promise<AdminAccount[]>
   createUser(input: CreateAccountInput): Promise<AdminAccount>
   disableUser(userId: string, disabled: boolean): Promise<void>
@@ -104,6 +112,16 @@ export interface SiteAdministrationApi {
 
 /** Explicit control-plane operations, shared by browser and the narrow Electron bridge. */
 export interface CentralApi {
+  superAgentAvailability(teamId: string): Promise<{ enabled: boolean }>
+  superAgentConfig(teamId: string): Promise<SuperAgentConfig>
+  updateSuperAgentConfig(teamId: string, config: SuperAgentConfigUpdate): Promise<SuperAgentConfig>
+  superAgentSessions(teamId: string): Promise<SuperAgentSession[]>
+  registerSuperAgentMachineSession(teamId: string, session: RegisterSuperAgentMachineSessionInput): Promise<SuperAgentSession>
+  superAgentUsage(teamId: string): Promise<SuperAgentUsage>
+  createSuperAgentSession(teamId: string, operationId: string, message?: SuperAgentMessageContent): Promise<{ sessionId: string; deliveryId?: string }>
+  sendSuperAgentMessage(teamId: string, sessionId: string, operationId: string, message: SuperAgentMessageContent): Promise<{ sessionId: string; deliveryId: string }>
+  cancelSuperAgentTurn(teamId: string, sessionId: string, turnId: string): Promise<void>
+  superAgentHistory(teamId: string, sessionId: string, startIndex: number, pendingSenders?: SuperAgentHistory["pendingSenders"], previews?: SuperAgentHistory["previews"]): Promise<SuperAgentHistory>
   status(): Promise<AccountState>
   login(): Promise<void>
   logout(): Promise<void>

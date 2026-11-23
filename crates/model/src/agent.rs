@@ -192,6 +192,9 @@ pub struct AgentSessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_limit_code: Option<TurnLimitCode>,
     pub last_event_seq: AgentSequence,
+    /// Timestamp of the latest user input or assistant message; absent until a message is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_at: Option<String>,
     /// Latest terminal turn event; absent until a turn finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_completed_seq: Option<AgentSequence>,
@@ -211,6 +214,9 @@ pub struct AgentSessionRecord {
     /// Actor that enabled YOLO mode for this Session, used for permission audit attribution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo_actor: Option<AgentActor>,
+    /// Whether this Session acts as a Team Super Agent with cross-workspace delegation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub super_agent: bool,
     pub created_at: String,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,6 +459,8 @@ pub struct AgentCreateSession {
     pub yolo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo_actor: Option<AgentActor>,
+    #[serde(default)]
+    pub super_agent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

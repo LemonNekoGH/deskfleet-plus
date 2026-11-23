@@ -3,7 +3,10 @@
 //! the migration ledger use typed schema identifiers.
 use crate::{
     Result,
-    entities::{cp_migrations as migrations, cp_push_subscriptions as push_subscriptions},
+    entities::{
+        cp_migrations as migrations, cp_push_subscriptions as push_subscriptions,
+        cp_site_settings as site_settings,
+    },
 };
 use sea_orm::sea_query::{Alias, ColumnDef, Expr, ExprTrait, Func, Order, Query, Table};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityName, Schema, TransactionTrait};
@@ -218,6 +221,53 @@ pub async fn migrate(db: &DatabaseConnection) -> Result<()> {
         }
         record_version(&tx, 36).await?;
     }
+    if !version_present(&tx, 37).await? {
+        tx.execute(
+            Table::alter().table(site_settings::Entity).add_column(
+                ColumnDef::new(site_settings::Column::CaptchaEnabled)
+                    .boolean()
+                    .not_null()
+                    .default(false),
+            ),
+        )
+        .await?;
+        record_version(&tx, 37).await?;
+    }
+    if !version_present(&tx, 38).await? {
+        tx.execute_unprepared(include_str!("cloud_sessions.sql"))
+            .await?;
+        record_version(&tx, 38).await?;
+    }
+    if !version_present(&tx, 39).await? {
+        tx.execute_unprepared(include_str!("cloud_agent_requests.sql"))
+            .await?;
+        record_version(&tx, 39).await?;
+    }
+    if !version_present(&tx, 40).await? {
+        tx.execute_unprepared(include_str!("plan_limits.sql"))
+            .await?;
+        record_version(&tx, 40).await?;
+    }
+    if !version_present(&tx, 41).await? {
+        tx.execute_unprepared(include_str!("cloud_session_inbox.sql"))
+            .await?;
+        record_version(&tx, 41).await?;
+    }
+    if !version_present(&tx, 42).await? {
+        tx.execute_unprepared(include_str!("cloud_token_usage.sql"))
+            .await?;
+        record_version(&tx, 42).await?;
+    }
+    if !version_present(&tx, 43).await? {
+        tx.execute_unprepared(include_str!("cloud_credit_rates.sql"))
+            .await?;
+        record_version(&tx, 43).await?;
+    }
+    if !version_present(&tx, 44).await? {
+        tx.execute_unprepared(include_str!("super_agent_config.sql"))
+            .await?;
+        record_version(&tx, 44).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -230,6 +280,50 @@ pub async fn down(db: &DatabaseConnection) -> Result<()> {
             .expr(Func::cust(Alias::new("pg_advisory_xact_lock")).arg(Expr::val(761946021_i64))),
     )
     .await?;
+    if version_present(&tx, 44).await? {
+        tx.execute_unprepared(include_str!("super_agent_config_down.sql"))
+            .await?;
+        remove_version(&tx, 44).await?;
+    }
+    if version_present(&tx, 43).await? {
+        tx.execute_unprepared(include_str!("cloud_credit_rates_down.sql"))
+            .await?;
+        remove_version(&tx, 43).await?;
+    }
+    if version_present(&tx, 42).await? {
+        tx.execute(Table::drop().table(crate::entities::cp_cloud_token_usage::Entity))
+            .await?;
+        remove_version(&tx, 42).await?;
+    }
+    if version_present(&tx, 41).await? {
+        tx.execute_unprepared(include_str!("cloud_session_inbox_down.sql"))
+            .await?;
+        remove_version(&tx, 41).await?;
+    }
+    if version_present(&tx, 40).await? {
+        tx.execute_unprepared(include_str!("plan_limits_down.sql"))
+            .await?;
+        remove_version(&tx, 40).await?;
+    }
+    if version_present(&tx, 39).await? {
+        tx.execute_unprepared(include_str!("cloud_agent_requests_down.sql"))
+            .await?;
+        remove_version(&tx, 39).await?;
+    }
+    if version_present(&tx, 38).await? {
+        tx.execute(Table::drop().table(crate::entities::cp_cloud_sessions::Entity))
+            .await?;
+        remove_version(&tx, 38).await?;
+    }
+    if version_present(&tx, 37).await? {
+        tx.execute(
+            Table::alter()
+                .table(site_settings::Entity)
+                .drop_column(site_settings::Column::CaptchaEnabled),
+        )
+        .await?;
+        remove_version(&tx, 37).await?;
+    }
     if version_present(&tx, 36).await? {
         tx.execute(Table::drop().table(push_subscriptions::Entity))
             .await?;

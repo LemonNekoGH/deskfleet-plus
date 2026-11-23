@@ -379,6 +379,13 @@ Team membership and Site Admin grants remain separate. The creator of a Team
 is its administrator; other accounts join through invitations matching their
 verified email. Operators explicitly grant Site Admin through the server CLI.
 
+Open **Site administration → Accounts** to enable ALTCHA verification for
+public sign-in and registration. The setting defaults to off and requires
+recent authentication to change. The bundled Web client and API handle
+verification on your deployment. Use HTTPS outside localhost so browsers can
+solve the proof-of-work challenge. API replicas share challenge state in PostgreSQL.
+Update every API replica and the Web client before enabling the setting.
+
 Local development writes `.eml` files to `.local/mail/`. Production requires
 SMTP; neither SMTP credentials nor raw challenge tokens enter logs. A failed
 send does not create an authenticated account, and another request sends a new
@@ -602,8 +609,8 @@ be reachable by both peers.
 
 While a Team server is in use, it replaces the site list for that Team's new
 grants, with no fallback to the site relay. Its traffic isn't reported to this
-deployment's usage collection. Self-hosted Teams are eligible; on hosted plans,
-Pro and Enterprise are. Site administrators can turn the feature off with
+deployment's usage collection. Self-hosted Teams are eligible. Hosted Teams
+use their plan's **Own TURN server** setting. Site administrators can turn the feature off with
 **Allow teams to use their own TURN servers** in Site administration, or with
 `"allowTeamServers": false` in `PATCH /api/admin/turn-settings`. It is on by
 default. Turning it off keeps saved Team servers unused until it is turned back

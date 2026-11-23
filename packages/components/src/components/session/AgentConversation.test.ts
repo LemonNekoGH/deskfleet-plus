@@ -1,8 +1,8 @@
 import { client } from "@deskfleet/client/platform"
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { afterEach, expect, test, vi } from "vitest"
-import type { CentralApi, CentralEvent } from "../../../../client/src/central.ts"
-import type { FilesApi, FileTarget } from "../../../../client/src/files.ts"
+import type { CentralApi, CentralEvent } from "@deskfleet/client/central"
+import type { FilesApi, FileTarget } from "@deskfleet/client/files"
 import { i18n } from "../../i18n/index.ts"
 import { agentEvent, agentInput, agentSnapshot } from "../../test/agent.ts"
 import AgentConversation from "./AgentConversation.vue"
@@ -137,4 +137,72 @@ test("out-of-turn wakeups render as live during active tools or uncommitted prev
   // Once the stream flushes (lastEventSeq catches up to 4), the wakeup settles to idle even while run is running.
   await wrapper.setProps({ snapshot: { ...snapshot, session: { ...snapshot.session, lastEventSeq: "4" } } })
   expect(wrapper.find('[aria-label="Fork session"]').exists()).toBe(true)
+})
+
+test("long history mounts nearby messages, releases their media on exit, and restores offscreen targets", async () => {
+  const viewport = document.createElement("div")
+  viewport.dataset.sessionScrollViewport = ""
+  document.body.appendChild(viewport)
+  let intersect!: (row: Element, visible: boolean) => void
+  const disconnect = vi.fn()
+  vi.stubGlobal("IntersectionObserver", class {
+    constructor(callback: IntersectionObserverCallback, options: IntersectionObserverInit) {
+      if (options?.root === viewport) {
+        intersect = (target, isIntersecting) => callback([{ target, isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver)
+      }
+    }
+    observe() {}
+    unobserve() {}
+    disconnect = disconnect
+  })
+  try {
+    const readResource = vi.fn().mockResolvedValue({ data: new Uint8Array([1]), mimeType: "image/png" })
+    client.files = { readResource } as unknown as FilesApi
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:chart")
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {})
+    const projection = Array.from({ length: 30 }, (_, i) => [
+      { id: `input-${i}`, kind: "input" as const, input: agentInput({ id: String(i), state: "delivered" }) },
+      { id: `message-${i}`, kind: "message" as const, role: "assistant" as const,
+        content: [{ type: "text" as const, text: i ? `Answer ${i}` : "![Chart](chart.png)" }] },
+    ]).flat()
+    wrapper = mount(AgentConversation, {
+      attachTo: viewport, props: { sessionId: "30", projection, resourceTarget: { kind: "local" } },
+      global: { plugins: [i18n], stubs: { PreviewViewer: true } },
+    })
+    await flushPromises()
+    const rows = wrapper.findAll("ol > li")
+    expect(rows).toHaveLength(60)
+    expect(wrapper.findAll(".ui-markdown")).toHaveLength(1)
+    expect(readResource).not.toHaveBeenCalled()
+
+    const first = rows[1]!.get("div")
+    intersect(first.element, true)
+    await flushPromises()
+    expect(readResource).toHaveBeenCalledOnce()
+    expect(wrapper.findAll(".ui-markdown")).toHaveLength(2)
+    vi.spyOn(first.element, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 713))
+    intersect(first.element, false)
+    await flushPromises()
+    expect(revoke).toHaveBeenCalledWith("blob:chart")
+    expect(first.element.style.height).toBe("713px")
+
+    await wrapper.setProps({ locateEntry: "message-0" })
+    await flushPromises()
+    expect(readResource).toHaveBeenCalledTimes(2)
+    expect(rows[1]!.find(".ui-markdown").exists()).toBe(true)
+    await wrapper.setProps({ locateEntry: undefined })
+    expect(rows[1]!.find(".ui-markdown").exists()).toBe(false)
+    window.dispatchEvent(new Event("beforeprint"))
+    await flushPromises()
+    expect(wrapper.findAll(".ui-markdown")).toHaveLength(30)
+    window.dispatchEvent(new Event("afterprint"))
+    await flushPromises()
+    expect(wrapper.findAll(".ui-markdown")).toHaveLength(1)
+  } finally {
+    wrapper?.unmount()
+    wrapper = undefined
+    viewport.remove()
+    vi.unstubAllGlobals()
+  }
+  expect(disconnect).toHaveBeenCalled()
 })

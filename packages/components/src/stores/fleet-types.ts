@@ -1,8 +1,8 @@
 // Client view models for the resource catalog.
 
-import type { AgentSessionContext, AgentSessionRecord } from "../../../../apps/daemon/src/agent-protocol.ts"
+import type { AgentSessionContext, AgentSessionRecord } from "@deskfleet/protocol/agent"
 
-export interface AgentSessionSummary extends Pick<AgentSessionRecord, "lastCompletedSeq" | "lastReadSeq"> {
+export interface AgentSessionSummary extends Pick<AgentSessionRecord, "lastCompletedSeq" | "lastReadSeq" | "lastMessageAt"> {
   id: string
   title?: string
   /** The agent provider's user-facing name. */
@@ -14,6 +14,7 @@ export interface AgentSessionSummary extends Pick<AgentSessionRecord, "lastCompl
   /** Absent until the Session's Agent metadata has loaded. */
   archiveState?: "active" | "archiving" | "archived"
   context?: AgentSessionContext
+  createdAt?: string
   /** Absent while provisioning or if context creation failed. */
   worktree?: WorktreeSummary
 }

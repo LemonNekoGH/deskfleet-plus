@@ -242,6 +242,8 @@ test("createAndroidRemoteAgentSettings reads, normalizes, and writes Remote Agen
     allowOperate: false,
     allowSessions: true,
     allowWorkspaces: false,
+    allowSuperAgent: false,
+    allowLocalCrossWorkspace: true,
   }
   const calls: unknown[] = []
   const plugin: RemoteAgentSettingsBridgePlugin = {
@@ -255,6 +257,8 @@ test("createAndroidRemoteAgentSettings reads, normalizes, and writes Remote Agen
         allowOperate: settings.allowOperate,
         allowSessions: Boolean(settings.allowSessions),
         allowWorkspaces: Boolean(settings.allowWorkspaces),
+        allowSuperAgent: Boolean(settings.allowSuperAgent),
+        allowLocalCrossWorkspace: Boolean(settings.allowLocalCrossWorkspace),
       }
       return stored
     },
@@ -267,8 +271,17 @@ test("createAndroidRemoteAgentSettings reads, normalizes, and writes Remote Agen
     allowOperate: true,
     allowSessions: false,
     allowWorkspaces: false,
+    allowSuperAgent: false,
+    allowLocalCrossWorkspace: false,
   })
   expect(calls).toEqual([
-    { allowRead: true, allowOperate: true, allowSessions: false, allowWorkspaces: false },
+    {
+      allowRead: true,
+      allowOperate: true,
+      allowSessions: false,
+      allowWorkspaces: false,
+      allowSuperAgent: false,
+      allowLocalCrossWorkspace: false,
+    },
   ])
 })

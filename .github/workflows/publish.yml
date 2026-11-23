@@ -68,6 +68,7 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
       IOS_GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.IOS_GOOGLE_SERVICE_INFO_PLIST }}
+      WINDOWS_SERVICE_SIGNING_KEY: ${{ secrets.WINDOWS_SERVICE_SIGNING_KEY }}
 
   nix:
     name: Nix
@@ -102,10 +103,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install locked Node
+      - name: Install locked Node and pnpm
         uses: ./.github/actions/setup-mise
         with:
-          tools: node
+          tools: node pnpm
           github-token: ${{ github.token }}
 
       - name: Download desktop installers
@@ -125,7 +126,7 @@ jobs:
       - name: Download server and daemon archives
         uses: actions/download-artifact@v8
         with:
-          pattern: deskfleet-{linux-x64,linux-arm64,macos-arm64,windows-x64}
+          pattern: deskfleet-{linux-x64,linux-arm64,macos-arm64,macos-x64,windows-x64}
           path: release-assets
           merge-multiple: true
 
@@ -147,7 +148,15 @@ jobs:
           mise exec node -- node scripts/package-nix-release.ts release-assets/deskfleet-nix.tar.gz \
             "release-assets/deskfleet-$VERSION-linux-x64.tar.gz" \
             "release-assets/deskfleet-$VERSION-linux-arm64.tar.gz" \
-            "release-assets/deskfleet-$VERSION-mac-arm64.zip"
+            "release-assets/deskfleet-$VERSION-mac-arm64.zip" \
+            "release-assets/deskfleet-$VERSION-mac-x64.zip"
+
+      - name: Merge macOS update metadata
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          pnpm --filter deskfleet install --frozen-lockfile
+          mise exec node -- node scripts/merge-macos-updates.ts release-assets "$VERSION"
 
       - name: Verify release assets
         shell: bash
@@ -157,6 +166,8 @@ jobs:
           assets=(
             "deskfleet-$VERSION-mac-arm64.dmg"
             "deskfleet-$VERSION-mac-arm64.zip"
+            "deskfleet-$VERSION-mac-x64.dmg"
+            "deskfleet-$VERSION-mac-x64.zip"
             "deskfleet-$VERSION-win-x64.exe"
             "deskfleet-$VERSION-linux-x86_64.AppImage"
             "deskfleet-$VERSION-linux-arm64.AppImage"
@@ -169,6 +180,7 @@ jobs:
             "deskfleet-$VERSION-android-arm64.apk"
             deskfleet-nix.tar.gz
             "deskfleet-$VERSION-mac-arm64.zip.blockmap"
+            "deskfleet-$VERSION-mac-x64.zip.blockmap"
             "deskfleet-$VERSION-win-x64.exe.blockmap"
             latest.yml
             latest-mac.yml
@@ -177,12 +189,16 @@ jobs:
             deskfleet-linux-x64.tar.gz
             deskfleet-linux-arm64.tar.gz
             deskfleet-macos-arm64.tar.gz
+            deskfleet-macos-x64.tar.gz
             deskfleet-windows-x64.tar.gz
           )
           # DMG blockmaps can be generated alongside the ZIP used by the updater.
-          if [[ -f "release-assets/deskfleet-$VERSION-mac-arm64.dmg.blockmap" ]]; then
-            assets+=("deskfleet-$VERSION-mac-arm64.dmg.blockmap")
-          fi
+          for arch in arm64 x64; do
+            blockmap="deskfleet-$VERSION-mac-$arch.dmg.blockmap"
+            if [[ -f "release-assets/$blockmap" ]]; then
+              assets+=("$blockmap")
+            fi
+          done
           for asset in "${assets[@]}"; do
             test -s "release-assets/$asset"
           done
@@ -273,6 +289,46 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+
+  super_agent_image:
+    name: Publish Super Agent image
+    needs: [validate, test, build, nix, aur, linux_packages]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download both tested Linux images
+        uses: actions/download-artifact@v8
+        with:
+          pattern: deskfleet-super-agent-image-*
+          path: images
+          merge-multiple: true
+
+      - name: Assemble the multi-architecture manifest
+        shell: bash
+        run: |
+          podman manifest create deskfleet-super-agent
+          for platform in linux-x64 linux-arm64; do
+            podman manifest add deskfleet-super-agent "docker-archive:$PWD/images/super-agent-$platform.tar.gz"
+          done
+          podman manifest inspect deskfleet-super-agent | jq -e \
+            '[.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64", "linux/arm64"]'
+
+      - name: Publish the release tags to GitHub Container Registry
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-super-agent"
+          printf '%s' "$REGISTRY_TOKEN" | podman login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          podman manifest push --all deskfleet-super-agent "docker://$image:$VERSION"
+          if [[ "$PRERELEASE" == false ]]; then
+            skopeo copy --all --preserve-digests "docker://$image:$VERSION" "docker://$image:latest"
+          fi
 
   google_play:
     name: Publish to Google Play (internal)

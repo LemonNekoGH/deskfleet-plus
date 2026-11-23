@@ -31,6 +31,8 @@ function normalizeRemoteAgentSettings(value: RemoteAgentSettings): RemoteAgentSe
     allowOperate: Boolean(value.allowOperate),
     allowSessions: Boolean(value.allowSessions),
     allowWorkspaces: Boolean(value.allowWorkspaces),
+    allowSuperAgent: Boolean(value.allowSuperAgent),
+    allowLocalCrossWorkspace: Boolean(value.allowLocalCrossWorkspace),
   }
 }
 

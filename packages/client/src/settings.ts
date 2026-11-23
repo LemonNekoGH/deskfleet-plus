@@ -1,9 +1,9 @@
 import type { BrowserNotificationPermission } from "./browser-notifications.ts"
 import type { LocalAgentSettingsApi } from "./local-agent.ts"
-import type { RemoteAgentSettings } from "../../../apps/daemon/src/remote-agent-settings.ts"
-import type { WorktreePreferences } from "../../../apps/daemon/src/worktree-preferences.ts"
-export type { RemoteAgentSettings } from "../../../apps/daemon/src/remote-agent-settings.ts"
-export type { WorktreePreferences } from "../../../apps/daemon/src/worktree-preferences.ts"
+import type { RemoteAgentSettings } from "@deskfleet/protocol/remote-agent-settings"
+import type { WorktreePreferences } from "@deskfleet/protocol/worktree-preferences"
+export type { RemoteAgentSettings } from "@deskfleet/protocol/remote-agent-settings"
+export type { WorktreePreferences } from "@deskfleet/protocol/worktree-preferences"
 
 export const SETTINGS_CHANNEL = "deskfleet:settings"
 export const SETTINGS_CHANGED_EVENT = "deskfleet:settings-changed"
@@ -17,6 +17,12 @@ export interface KeepAwakeState {
   enabled: boolean
 }
 
+export interface LinuxKeyringState {
+  useSystemKeyring: boolean
+  restartRequired: boolean
+  overriddenExternally?: boolean
+}
+
 export type UpdateInstallSource =
   | "desktop_installer"
   | "package_manager"
@@ -28,6 +34,7 @@ export type UpdateInstallSource =
 export interface AutoDownloadUpdatesState {
   enabled: boolean
   pauseOnMetered: boolean
+  installOnQuit?: boolean
   installSource: UpdateInstallSource
 }
 
@@ -61,9 +68,12 @@ export interface SettingsApi extends LocalAgentSettingsApi {
   setLaunchAtStartup(enabled: boolean): Promise<LaunchAtStartupState>
   getKeepAwake(): Promise<KeepAwakeState>
   setKeepAwake(enabled: boolean): Promise<KeepAwakeState>
+  getLinuxKeyring?(): Promise<LinuxKeyringState>
+  setLinuxKeyring?(useSystemKeyring: boolean): Promise<LinuxKeyringState>
   getAutoDownloadUpdates(): Promise<AutoDownloadUpdatesState>
   setAutoDownloadUpdates(enabled: boolean): Promise<AutoDownloadUpdatesState>
   setPauseUpdatesOnMetered(enabled: boolean): Promise<AutoDownloadUpdatesState>
+  setInstallUpdatesOnQuit?(enabled: boolean): Promise<AutoDownloadUpdatesState>
   getWorktreeRoot(): Promise<WorktreeRootState>
   setWorktreeRoot(root: string | null): Promise<WorktreeRootState>
   chooseWorktreeRoot(): Promise<string | null>

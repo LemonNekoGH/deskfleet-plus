@@ -56,6 +56,8 @@ on:
         required: false
       IOS_GOOGLE_SERVICE_INFO_PLIST:
         required: false
+      WINDOWS_SERVICE_SIGNING_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -73,11 +75,17 @@ jobs:
         # Linux release binaries link against the build host's glibc. Keep these
         # two builds on the oldest supported Ubuntu LTS so the packages still
         # install on it; every other Linux job uses the newest Ubuntu image.
-        include: ${{ fromJSON(inputs.smoke_build && '[{"platform":"linux-x64","os":"ubuntu-24.04"}]' || '[{"platform":"linux-x64","os":"ubuntu-24.04"},{"platform":"linux-arm64","os":"ubuntu-24.04-arm"},{"platform":"macos-arm64","os":"macos-latest"},{"platform":"windows-x64","os":"windows-latest"}]') }}
+        include: ${{ fromJSON(inputs.smoke_build && '[{"platform":"linux-x64","os":"ubuntu-24.04"}]' || '[{"platform":"linux-x64","os":"ubuntu-24.04"},{"platform":"linux-arm64","os":"ubuntu-24.04-arm"},{"platform":"macos-arm64","os":"macos-latest"},{"platform":"macos-x64","os":"macos-26-intel"},{"platform":"windows-x64","os":"windows-latest"}]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Free unused Android SDK space on Linux
+        if: runner.os == 'Linux'
+        # The separate Android job owns that build. Leave room here for the
+        # release target, container layers, and the tested image archive.
+        run: sudo rm -rf /usr/local/lib/android
 
       - name: Disable MSVC PDB generation for release builds
         if: runner.os == 'Windows'
@@ -91,7 +99,7 @@ jobs:
         id: setup_build
         uses: ./.github/actions/setup-build
         with:
-          github-token: ${{ github.event_name != 'pull_request' && github.token || '' }}
+          github-token: ${{ github.token }}
           # Main's Linux x64 smoke build keeps a release target entry for later
           # smoke builds; full builds only restore it, so other platforms do not
           # take quota. Production releases build without a target cache.
@@ -118,6 +126,7 @@ jobs:
         if: ${{ inputs.production_release }}
         env:
           DESKFLEET_SOURCEMAPS: "1"
+          DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS: ${{ vars.DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS }}
           VITE_SENTRY_DIST: web
           VITE_STATSIG_CLIENT_KEY: ${{ vars.VITE_STATSIG_CLIENT_KEY }}
           VITE_STATSIG_ENVIRONMENT: ${{ vars.VITE_STATSIG_ENVIRONMENT }}
@@ -172,6 +181,9 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           DESKFLEET_NATIVE_PREBUILT: "1"
+          DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS: ${{ inputs.production_release && vars.DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS || '' }}
+          WINDOWS_SERVICE_SIGNING_KEY: ${{ inputs.production_release && secrets.WINDOWS_SERVICE_SIGNING_KEY || '' }}
+          WINDOWS_SERVICE_SIGNING_KEY_ID: ${{ inputs.production_release && vars.WINDOWS_SERVICE_SIGNING_KEY_ID || '' }}
         # Linux smoke builds produce only the tar.gz payload that Linux packages
         # and Nix consume. Full builds keep every configured target.
         run: >-
@@ -232,6 +244,42 @@ jobs:
           docker build --platform "linux/$arch" -f apps/server/Dockerfile -t deskfleet-server:smoke image-context
           mise exec -- node scripts/smoke-server-image.ts deskfleet-server:smoke
 
+      - name: Install Nix for the Super Agent image
+        if: runner.os == 'Linux'
+        uses: cachix/install-nix-action@bb0495a1086c46893eee56f32fd192dfe4a15bb9 # v32.0.0
+        with:
+          github_access_token: ${{ github.event_name != 'pull_request' && github.token || '' }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the Super Agent image with Nix
+        if: runner.os == 'Linux'
+        run: nix build .#super-agent-image --print-build-logs --out-link "$RUNNER_TEMP/result-super-agent-image"
+
+      - name: Smoke test the Nix-built Super Agent image
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          docker load --input "$RUNNER_TEMP/result-super-agent-image"
+          image_tag=$(nix eval --raw .#super-agent-image.imageTag)
+          # Reuse the release dependencies compiled by napi for the explicit host target.
+          host_target=$(mise exec -- rustc --print host-tuple)
+          CARGO_BUILD_TARGET="$host_target" mise exec -- node scripts/smoke-super-agent-image.ts "deskfleet-super-agent:$image_tag" --release
+
+      - name: Stage the tested Super Agent archive
+        if: runner.os == 'Linux' && inputs.production_release
+        run: cp "$RUNNER_TEMP/result-super-agent-image" "$RUNNER_TEMP/super-agent-${{ matrix.platform }}.tar.gz"
+
+      - name: Upload the tested Super Agent image
+        if: runner.os == 'Linux' && inputs.production_release
+        uses: actions/upload-artifact@v7
+        with:
+          name: deskfleet-super-agent-image-${{ matrix.platform }}
+          path: ${{ runner.temp }}/super-agent-${{ matrix.platform }}.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify the standalone daemon
         run: mise run daemon:smoke
 
@@ -251,7 +299,11 @@ jobs:
           host_target=$(mise exec -- rustc --print host-tuple)
           cp "target/$host_target/release/deskfleet-server$extension" dist/
           cp "apps/daemon/dist/deskfleet-daemon$extension" dist/
-          cp -R apps/daemon/dist/dsh dist/dsh
+          if [[ "$PLATFORM" == macos-x64 ]]; then
+            test "$(lipo -archs dist/deskfleet-server)" = x86_64
+            test "$(lipo -archs dist/deskfleet-daemon)" = x86_64
+            dist/deskfleet-server --help
+          fi
           tar -czf "deskfleet-$PLATFORM.tar.gz" -C dist .
 
       - name: Upload server and daemon artifacts
@@ -261,6 +313,11 @@ jobs:
           path: deskfleet-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+      - name: Stage Intel macOS update metadata
+        if: matrix.platform == 'macos-x64' && inputs.production_release
+        # Publish combines both macOS feeds after downloading all installers.
+        run: mv apps/desktop/release/latest-mac.yml apps/desktop/release/latest-mac-x64.yml
 
       - name: Upload desktop installers
         uses: actions/upload-artifact@v7
@@ -300,7 +357,7 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup-build
         with:
-          github-token: ${{ github.event_name != 'pull_request' && github.token || '' }}
+          github-token: ${{ github.token }}
 
       - name: Configure Gradle Maven Central mirror
         uses: ./.github/actions/setup-gradle-mirror
@@ -433,7 +490,7 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup-build
         with:
-          github-token: ${{ github.event_name != 'pull_request' && github.token || '' }}
+          github-token: ${{ github.token }}
 
       - name: Build iOS archive (smoke)
         if: ${{ !inputs.production_release && !inputs.signed_ios }}

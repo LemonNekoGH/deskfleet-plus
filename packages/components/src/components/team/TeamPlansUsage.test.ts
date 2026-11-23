@@ -1,3 +1,4 @@
+import { planCatalogFixture, quotaFixture } from "../../test/plan-quotas.ts"
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils"
 import { afterEach, expect, test, vi } from "vitest"
 import type { TeamBilling } from "@deskfleet/client/billing"
@@ -14,7 +15,7 @@ vi.mock("../../services/analytics.ts", () => ({ trackEvent: vi.fn(), beginAnalyt
 
 let view: VueWrapper | undefined
 let session: AccountSession | undefined
-afterEach(() => { view?.unmount(); view = undefined; session?.dispose(); session = undefined; vi.clearAllMocks() })
+afterEach(() => { view?.unmount(); view = undefined; session?.dispose(); session = undefined; vi.clearAllMocks(); vi.unstubAllGlobals() })
 const usage = () => view!.getComponent(TeamPlansUsage)
 const metric = (key: string) => usage().get(`[data-team-usage="${key}"]`)
 
@@ -35,7 +36,7 @@ async function setup(configure?: (fake: ReturnType<typeof fakeCentral>) => void,
 }
 
 const free = (usage = { relayedBytes: "0", activeSessionCount: 3, memberCount: 3 }): TeamBilling => ({
-  ...billingFixture(usage), plan: "free", limits: { maxActiveSessions: 3, maxTurnsPerSession: 30, maxMembers: 3, turnBytes: 0 }, paymentsAvailable: true,
+  ...billingFixture(usage), plan: "free", limits: quotaFixture.free, paymentsAvailable: true,
 })
 const button = (label: string) => usage().findAll("button").find(value => value.text() === label)
 
@@ -61,10 +62,13 @@ test.each([[0, 0], [8, 4]])("%s active sessions and %s members are counts agains
   expect(metric("turns").text()).toContain("Unlimited")
 })
 
-test("failed usage requests can be retried without showing zero as the result", async () => {
+test("failed usage requests can be retried without showing zero or reporting an unhandled global error", async () => {
+  const reportError = vi.fn()
+  vi.stubGlobal("reportError", reportError)
   const fake = await setup(fake => fake.central.billing
-    .mockRejectedValueOnce(new Error("Network unavailable"))
+    .mockRejectedValueOnce(new HttpError(401, "Unauthorized", undefined, "unauthorized"))
     .mockResolvedValueOnce(billingFixture({ relayedBytes: "2048", activeSessionCount: 3, memberCount: 2 })))
+  expect(reportError).not.toHaveBeenCalled()
   expect(usage().get('[role="alert"]').text()).toBe("Could not load usage.")
   expect(usage().find("[data-team-usage-amount]").exists()).toBe(false)
   await button("Retry")!.trigger("click")
@@ -121,7 +125,7 @@ test("Free shows finite limits, relay as not included, and no billing actions fo
 test("metered relay shows the remaining allowance and next reset", async () => {
   await setup(fake => fake.central.billing.mockResolvedValue({
     ...billingFixture({ relayedBytes: String(1610612736), activeSessionCount: 1, memberCount: 1 }), plan: "go",
-    limits: { maxActiveSessions: null, maxTurnsPerSession: null, maxMembers: null, turnBytes: 2147483648 }, nextResetAt: "2026-11-28T00:00:00Z",
+    limits: quotaFixture.go, nextResetAt: "2026-11-28T00:00:00Z",
   }))
   expect(metric("traffic").get("[data-team-usage-amount]").text()).toBe("1.5 GiB / 2.0 GiB")
   expect(metric("traffic").get('[role="progressbar"]').attributes("aria-valuenow")).toBe("75")
@@ -226,7 +230,7 @@ test("Enterprise contact is hidden when unset or already granted", async () => {
 test("a failed renewal offers billing admins the payment recovery action", async () => {
   const fake = await setup(fake => fake.central.billing.mockResolvedValue({
     ...billingFixture(), plan: "go", paymentsAvailable: true, canManageBilling: true,
-    limits: { maxActiveSessions: null, maxTurnsPerSession: null, maxMembers: null, turnBytes: 2147483648 },
+    limits: quotaFixture.go,
     subscription: { plan: "go", status: "past_due", paidThrough: "2026-11-01T00:00:00Z", cancelAtPeriodEnd: false },
   }))
   expect(usage().get("[data-team-plan]").text()).toContain("Payment issue")
@@ -329,18 +333,36 @@ test("an earlier account's pending Checkout is not attributed to its replacement
 })
 
 test("comparison uses server allowances for the current plan and stays visible to subscribers", async () => {
-  await setup(fake => fake.central.billing.mockResolvedValue({
-    ...free(), plan: "go", canManageBilling: true,
-    limits: { maxActiveSessions: null, maxTurnsPerSession: null, maxMembers: null, turnBytes: 4_294_967_296 },
-    subscription: { plan: "go", status: "active", paidThrough: "2026-12-01T00:00:00Z", cancelAtPeriodEnd: false },
-  }))
+  await setup(fake => {
+    fake.central.superAgentAvailability.mockResolvedValue({ enabled: true })
+    fake.central.billing.mockResolvedValue({
+      ...free(), plan: "go", canManageBilling: true,
+      limits: { ...quotaFixture.go, turnBytes: 4_294_967_296 },
+      planCatalog: planCatalogFixture().map(entry => entry.plan === "go" ? { ...entry, turnBytes: 4_294_967_296 }
+        : entry.plan === "pro" ? { ...entry, teamTurnServers: false, superAgentTokens: 98765, turnBytes: 512 } : entry),
+      subscription: { plan: "go", status: "active", paidThrough: "2026-12-01T00:00:00Z", cancelAtPeriodEnd: false },
+    })
+  })
   const current = usage().get('[data-plan-comparison="go"]')
   expect(current.text()).toContain("Current plan")
   expect(current.text()).toContain("4 GiB")
+  const pro = usage().get('[data-plan-comparison="pro"]')
+  expect(pro.get("[data-plan-team-turn]").attributes("data-plan-team-turn")).toBe("false")
+  expect(metric("tokens").get("h3").text()).toBe("Monthly credits")
+  expect(pro.findAll("dt").map(term => term.text())).toContain("Monthly credits")
+  expect(pro.text()).toContain("98765")
+  expect(pro.text()).toContain("512 B")
   expect(current.text()).toContain("Unlimited")
   expect(current.find("button").exists()).toBe(false)
   expect(usage().findAll("[data-plan-comparison]")).toHaveLength(3)
   expect(button("Manage billing")).toBeDefined()
+})
+
+test("a closed rollout hides credit allowances across usage and the catalog", async () => {
+  await setup(fake => fake.central.billing.mockResolvedValue(free()))
+  expect(usage().find("[data-team-usage=tokens]").exists()).toBe(false)
+  expect(usage().text()).not.toContain("Monthly credits")
+  expect(usage().findAll("[data-plan-comparison]")).toHaveLength(3)
 })
 
 test.each([

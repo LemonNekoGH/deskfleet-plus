@@ -1,13 +1,15 @@
 import { useBreakpoints, useLocalStorage } from "@vueuse/core"
 import { defineStore } from "pinia"
-import { computed, nextTick, onScopeDispose, ref, shallowRef, watch } from "vue"
-import type { AgentSessionContext } from "../../../../apps/daemon/src/agent-protocol.ts"
-import type { FileResourceRequest } from "../../../client/src/files.ts"
+import { computed, markRaw, nextTick, onScopeDispose, ref, shallowRef, watch } from "vue"
+import type { AgentSessionContext } from "@deskfleet/protocol/agent"
+import type { FileResourceRequest } from "@deskfleet/client/files"
 import { parseSessionWindowHash } from "@deskfleet/client/session-window"
 import { router } from "../router/index.ts"
 import { usePlatformClient } from "../composables/usePlatformClient.ts"
+import { createSidebarFilter } from "../composables/useSidebarFilter.ts"
+import { createSidebarOrder } from "../composables/useSidebarOrder.ts"
 import type { PreviewDescriptor, PreviewSource } from "../services/preview.ts"
-import { springScrollIntoView } from "../services/spring-scroll.ts"
+import { scrollToConversationEntry } from "../services/conversation-locate.ts"
 
 export interface MermaidSource { sessionId?: string; entryId?: string; diagramId?: string }
 export interface MermaidLocateRequest extends MermaidSource { id: number; code: string }
@@ -46,7 +48,7 @@ export function performMermaidLocateDom(request: MermaidLocateRequest | null = p
   clearTimeout(locatedTimer)
   for (const prev of document.querySelectorAll<HTMLElement>("[data-mermaid-located]")) delete prev.dataset.mermaidLocated
   target.dataset.mermaidLocated = "true"
-  springScrollIntoView(target)
+  scrollToConversationEntry(target, request.sessionId)
   locatedTimer = setTimeout(() => { delete target.dataset.mermaidLocated }, 1600)
   return true
 }
@@ -83,6 +85,7 @@ export function listenMermaidLocate(handler: (code: string, source?: MermaidSour
 }
 
 export const useLayoutStore = defineStore("layout", () => {
+  const sidebarOrder = markRaw(createSidebarOrder())
   const standaloneSession = ref(
     (typeof window !== "undefined" && parseSessionWindowHash(window.location.hash) !== undefined)
       || router.currentRoute.value.query.window === "session",
@@ -115,6 +118,8 @@ export const useLayoutStore = defineStore("layout", () => {
   /** The Session terminal panel below the conversation. */
   const terminalPanelOpen = useLocalStorage("deskfleet.terminal-panel-open", false)
   const terminalPanelHeight = useLocalStorage("deskfleet.terminal-panel-height", 280)
+  /** Non-persistent filter shared in local-only mode when MachineRuntimes is absent. */
+  const sidebarFilter = markRaw(createSidebarFilter())
 
   function toggleSidebar(): void {
     if (standaloneSession.value) return
@@ -152,6 +157,8 @@ export const useLayoutStore = defineStore("layout", () => {
     sessionContext,
     terminalPanelOpen,
     terminalPanelHeight,
+    sidebarFilter,
+    sidebarOrder,
     toggleSidebar,
     toggleDetails,
     requestDetailsOpen,

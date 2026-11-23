@@ -4,23 +4,48 @@
 mod android;
 #[cfg(target_os = "android")]
 mod android_decoder;
+#[cfg(target_os = "android")]
+mod android_keyboard;
+#[cfg(target_os = "android")]
+mod android_window;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 mod av1_config;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod clipboard;
 #[cfg(test)]
 mod codec_tests;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod gpui_input;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod host;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(any(target_os = "android", target_os = "ios", test))]
 mod input;
 mod input_configuration;
 mod input_queue;
 mod input_reply;
+mod input_text;
+#[cfg(target_os = "ios")]
+mod ios_controls;
+#[cfg(any(target_os = "ios", test))]
+mod ios_key_state;
+#[cfg(target_os = "ios")]
+mod ios_keyboard;
+#[cfg(target_os = "ios")]
+mod ios_pointer;
+#[cfg(target_os = "ios")]
+mod ios_window;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos_decoder;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+mod mobile_layout;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+mod mobile_overlay;
+#[cfg(target_os = "android")]
+mod nsh_android;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod nsh_chrome;
+mod nsh_controls;
+mod nsh_keyboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod nsh_keyboard_focus;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -29,7 +54,6 @@ mod nsh_layout;
 mod nsh_session_state;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod nsh_toolbar;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod nsh_ui;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod nsh_video;
@@ -51,10 +75,12 @@ mod renderer;
 mod rtp_video;
 mod session;
 mod session_manager;
+mod stream_stats;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod window_branding;
 #[cfg(target_os = "windows")]
 mod windows_decoder;
+mod zoom;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::io;
@@ -77,6 +103,8 @@ enum WindowEvent {
         codec: protocol::Codec,
     },
     FrameReady,
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    InputEnabled(bool),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Error(String),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -87,6 +115,8 @@ enum WindowEvent {
     Connected(bool),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     InputReady,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    RemoteClipboard(String),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     SessionEnded,
 }

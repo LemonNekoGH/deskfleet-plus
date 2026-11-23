@@ -5,8 +5,8 @@ import type { DeskfleetDesktopApi } from "./desktop-api.ts"
 import type { CentralApi, CentralEvent, Machine } from "./central.ts"
 import type { CatalogSnapshot } from "./catalog.ts"
 import type { DesktopEvent, DesktopOffer, DesktopStart, IceCandidate } from "./desktop-media.ts"
-import type { TerminalOffer } from "../../../apps/daemon/src/control-protocol.ts"
-import type { AgentMethod, AgentMethods } from "../../../apps/daemon/src/agent-protocol.ts"
+import type { TerminalOffer } from "@deskfleet/protocol/control"
+import type { AgentMethod, AgentMethods } from "@deskfleet/protocol/agent"
 import type { TerminalSummary } from "./terminal.ts"
 import { LocalDataChannel } from "./local-channels.ts"
 import type { DataChannel } from "./data-channel.ts"
@@ -181,7 +181,9 @@ export function remoteMachineClient(host: DeskfleetDesktopApi, central: CentralA
       history: {
         parallel: () => !local,
         available: () => online,
-        list: async () => (await central.sessions(machine.teamId, machine.id)).map(snapshot => ({ ...snapshot.session,
+        list: async () => (await central.sessions(machine.teamId, machine.id)).map(snapshot => ({
+          ...snapshot.session,
+          lastMessageAt: snapshot.session.lastMessageAt ?? snapshot.turns.reduce<string | undefined>((latest, t) => t.endedAt && (!latest || t.endedAt > latest) ? t.endedAt : latest, undefined),
           working: snapshot.permissions?.some(permission => permission.state === "pending") ? "permission" as const
             : snapshot.elicitations?.some(elicitation => elicitation.state === "pending") ? "question" as const
             : snapshot.turns.some(turn => ["starting", "running", "cancelling"].includes(turn.state)),
@@ -191,7 +193,11 @@ export function remoteMachineClient(host: DeskfleetDesktopApi, central: CentralA
       },
     },
     terminal: {
-      ...signaling("terminal"), list: async () => online && !awaitingRoster ? (knownTerminals = await rpc("terminalList")) : knownTerminals,
+      ...signaling("terminal"),
+      async list() {
+        if (online && !awaitingRoster) knownTerminals = await automatic.rpc(machine.teamId, machine.id, "terminalList", {})
+        return knownTerminals
+      },
       multiplexed: !local && !!messageChannel("terminal"),
       dial: options => userRpc("terminalDial", options), hangup: terminalId => userRpc("terminalHangup", { terminalId }),
       onSessionEvent: () => () => {},

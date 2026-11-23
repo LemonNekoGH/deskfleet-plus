@@ -6,10 +6,13 @@ import type { MachineSummary } from "../../stores/fleet-types.ts"
 import { Plus } from "@lucide/vue"
 import { useEventListener } from "@vueuse/core"
 import { storeToRefs } from "pinia"
+import { ToggleGroupItem, ToggleGroupRoot } from "reka-ui"
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { useAccountSession } from "../../composables/useAccountSession.ts"
 import { useMachineRuntimes } from "../../composables/useMachineRuntimes.ts"
+import { useSidebarFilter, type SidebarSessionFilter } from "../../composables/useSidebarFilter.ts"
+import { machineOrderGroup, useSidebarOrder } from "../../composables/useSidebarOrder.ts"
 import { useFleetStore } from "../../stores/fleet.ts"
 import { useLayoutStore } from "../../stores/layout.ts"
 import WindowToolbar from "../chrome/WindowToolbar.vue"
@@ -30,6 +33,16 @@ const platformClient = usePlatformClient()
 const fleet = useFleetStore()
 const account = useAccountSession()
 const runtimes = useMachineRuntimes()
+const sidebarFilter = useSidebarFilter()
+const filterOptions = computed<{ id: SidebarSessionFilter; label: string; count?: number }[]>(() => [
+  { id: "all", label: t("sidebar.filterAll") },
+  { id: "unread", label: t("sidebar.filterUnread"), count: sidebarFilter.totalUnread.value },
+  { id: "working", label: t("sidebar.filterWorking"), count: sidebarFilter.totalWorking.value },
+])
+const filterEmpty = computed(() =>
+  sidebarFilter.filter.value === "unread" && sidebarFilter.totalUnread.value === 0
+  || sidebarFilter.filter.value === "working" && sidebarFilter.totalWorking.value === 0,
+)
 const { compact, sidebarWidth } = storeToRefs(useLayoutStore())
 const scrollArea = useTemplateRef<InstanceType<typeof UiScrollArea>>("scrollArea")
 onMounted(() => {
@@ -41,6 +54,9 @@ onBeforeUnmount(() => {
   if (runtimes && el) runtimes.sidebarScrollTop = el.scrollTop
 })
 const { machines, catalogError, catalogLoading } = storeToRefs(fleet)
+const sidebarOrder = useSidebarOrder()
+const accountMachines = computed(() => sidebarOrder.ordered(machineOrderGroup, account?.machines.value ?? []))
+const localMachines = computed(() => sidebarOrder.ordered(machineOrderGroup, machines.value))
 const platform = platformClient.platform
 // Each opened machine retains its own catalog and action scope.
 const loaded = (id: string) => machines.value.find(machine => machine.id === id)
@@ -102,10 +118,19 @@ function refresh(): void {
 
     <SidebarNavigation />
 
+    <div class="app-no-drag shrink-0 border-b border-ui-border px-4 pt-2.5">
+      <ToggleGroupRoot :model-value="sidebarFilter.filter.value" type="single" :aria-label="t('sidebar.filterLabel')" class="flex items-center gap-4" @update:model-value="value => value && (sidebarFilter.filter.value = value as SidebarSessionFilter)">
+        <ToggleGroupItem v-for="option in filterOptions" :key="option.id" :value="option.id" :data-sidebar-filter="option.id" class="ui-tab gap-1 pb-2 text-xs font-medium" :class="sidebarFilter.filter.value === option.id && 'ui-tab-active'">
+          <span>{{ option.label }}</span>
+          <span v-if="option.count && option.count > 0" class="tabular-nums text-[11px] opacity-70">{{ option.count }}</span>
+        </ToggleGroupItem>
+      </ToggleGroupRoot>
+    </div>
+
     <UiScrollArea
       ref="scrollArea"
       class="min-h-0 min-w-0 flex-1"
-      content-class="px-2 pt-4 pb-3"
+      content-class="px-2 pt-3 pb-3"
       data-sidebar-scroll-area
       :viewport-attrs="{ 'data-sidebar-scroll-viewport': '' }"
     >
@@ -119,13 +144,17 @@ function refresh(): void {
       </div>
       <p v-if="catalogError" role="alert" class="mx-2.5 mb-3 break-words text-xs text-ui-danger">{{ catalogError }}</p>
       <template v-if="account">
-        <template v-for="machine in account.machines.value" :key="machine.id">
+        <template v-for="machine in accountMachines" :key="machine.id">
           <MachineSection v-if="loaded(machine.id)" :machine="loaded(machine.id)!" />
           <MachineSidebarSurface v-else-if="runtimes?.opened.has(machine.id)" :runtime="runtimes.opened.get(machine.id)!" />
           <MachineSection v-else :machine="unopened(machine)" />
         </template>
       </template>
-      <MachineSection v-for="machine in machines" v-else :key="machine.id" :machine="machine" />
+      <MachineSection v-for="machine in localMachines" v-else :key="machine.id" :machine="machine" />
+      <div v-if="filterEmpty" class="mx-2.5 mt-4 flex flex-col items-start gap-1.5 text-xs text-ui-text-faint">
+        <p class="m-0">{{ t(sidebarFilter.filter.value === 'unread' ? 'sidebar.filterEmptyUnread' : 'sidebar.filterEmptyWorking') }}</p>
+        <button type="button" class="cursor-pointer rounded text-ui-accent hover:underline" @click="sidebarFilter.filter.value = 'all'">{{ t('sidebar.showAllSessions') }}</button>
+      </div>
     </UiScrollArea>
 
     <AccountNotices />

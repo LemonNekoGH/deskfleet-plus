@@ -19,7 +19,7 @@ use ndk::native_window::NativeWindow;
 use serde_json::json;
 use tokio::sync::{mpsc, watch};
 
-use crate::input::normalized_point;
+use crate::input::TouchInput;
 use crate::input_queue;
 use crate::protocol::{self, Command};
 use crate::queue::FrameQueue;
@@ -27,6 +27,7 @@ use crate::queue::FrameQueue;
 use crate::renderer::NativeWindow;
 use crate::renderer::{PhysicalSize, Renderer};
 use crate::session::{self, Frames};
+use crate::zoom::{self, Zoom};
 use crate::{Error, WindowEvent};
 
 #[derive(Clone)]
@@ -42,7 +43,15 @@ impl AndroidNotifier {
     }
 }
 
+pub(crate) fn send_pointer(phase: crate::input::PointerPhase, position: (f64, f64)) {
+    send_render(RenderCommand::Pointer { phase, position });
+}
+
 enum RenderCommand {
+    Pointer {
+        phase: crate::input::PointerPhase,
+        position: (f64, f64),
+    },
     Window(WindowEvent),
     SurfaceAttached {
         window: NativeWindow,
@@ -54,6 +63,7 @@ enum RenderCommand {
         height: u32,
     },
     SurfaceDestroyed,
+    ViewInput(Vec<InputEvent>),
     Touch {
         kind: i32,
         x: f64,
@@ -99,6 +109,10 @@ struct AndroidViewer {
     shutdown: watch::Sender<bool>,
     renderer: Option<Renderer>,
     control: bool,
+    touch: TouchInput,
+    zoom: Zoom,
+    /// The video size the zoom applies to; a new size starts unzoomed.
+    zoom_video: (u32, u32),
     redraw: bool,
     submitted: u64,
     last_stats: Instant,
@@ -113,6 +127,9 @@ impl AndroidViewer {
             shutdown,
             renderer: None,
             control: false,
+            touch: TouchInput::default(),
+            zoom: Zoom::default(),
+            zoom_video: (0, 0),
             redraw: true,
             submitted: 0,
             last_stats: Instant::now(),
@@ -156,7 +173,15 @@ impl AndroidViewer {
         match cmd {
             RenderCommand::Window(WindowEvent::Start { title, control, .. }) => {
                 tracing::info!(%title, control, "Android viewer started");
-                self.control = control;
+                self.control = false;
+                self.touch = TouchInput::default();
+                self.set_zoom(Zoom::default());
+            }
+            RenderCommand::Window(WindowEvent::InputEnabled(enabled)) => {
+                if !enabled {
+                    self.touch.clear_pointer_buttons();
+                }
+                self.control = enabled;
             }
             RenderCommand::Window(WindowEvent::FrameReady) => {}
             RenderCommand::SurfaceAttached {
@@ -174,9 +199,29 @@ impl AndroidViewer {
                     self.redraw = true;
                 }
             }
+            RenderCommand::Pointer { phase, position } => {
+                if self.control {
+                    let viewport = self.layout().map_or((0., 0., 0., 0.), |(surface, fit, _)| {
+                        self.zoom.rect(surface, fit)
+                    });
+                    for event in self.touch.pointer(phase, position, viewport) {
+                        self.input.send(event)?;
+                    }
+                }
+            }
             RenderCommand::SurfaceDestroyed => {
+                self.touch.clear_pointer_buttons();
                 let _ = self.input.send(InputEvent::ReleaseAll);
                 self.renderer = None;
+            }
+            RenderCommand::ViewInput(events) => {
+                let release = events.first() == Some(&InputEvent::ReleaseAll);
+                if release {
+                    self.touch.clear_pointer_buttons();
+                }
+                if self.control || (release && events.len() == 1) {
+                    self.input.send_sequence(events)?;
+                }
             }
             RenderCommand::Touch { kind: 7, .. } => {
                 let _ = protocol::emit(json!({"type":"closeRequested"}));
@@ -184,7 +229,17 @@ impl AndroidViewer {
                 self.shutdown.send_replace(true);
                 return Ok(true);
             }
-            RenderCommand::Touch { kind, x, y, dx, dy } if self.control => {
+            // Zoom is local presentation, so it works without input control.
+            RenderCommand::Touch {
+                kind: kind @ 15..=17,
+                x,
+                y,
+                dx,
+                ..
+            } => self.handle_zoom(kind, (x, y), dx),
+            RenderCommand::Touch { kind, x, y, dx, dy }
+                if self.control || kind == 6 || kind == 14 =>
+            {
                 self.handle_touch(kind, (x, y), (dx, dy))?;
             }
             RenderCommand::Touch { .. } => {}
@@ -193,57 +248,55 @@ impl AndroidViewer {
         Ok(false)
     }
 
-    fn handle_touch(&self, kind: i32, pos: (f64, f64), delta: (f64, f64)) -> Result<(), Error> {
-        if kind == 6 {
-            let _ = self.input.send(InputEvent::ReleaseAll);
-            return Ok(());
+    /// The surface size, contain-fitted video rect, and viewport limit, once
+    /// a surface shows video.
+    fn layout(&self) -> Option<((f64, f64), zoom::Rect, f64)> {
+        let renderer = self.renderer.as_ref()?;
+        if renderer.video_size.0 == 0 || renderer.video_size.1 == 0 {
+            return None;
         }
-        let Some(renderer) = self.renderer.as_ref() else {
-            return Ok(());
-        };
-        let Some((x, y)) =
-            normalized_point(pos, renderer.surface_size(), renderer.video_size, kind == 2)
-        else {
-            return Ok(());
-        };
-        match kind {
-            0 => self.input.send(InputEvent::PointerMove { x, y })?,
-            1 => {
-                self.input.send(InputEvent::PointerMove { x, y })?;
-                self.input.send(InputEvent::PointerButton {
-                    button: 0,
-                    pressed: true,
-                    x,
-                    y,
-                })?;
-            }
-            2 => self.input.send(InputEvent::PointerButton {
-                button: 0,
-                pressed: false,
-                x,
-                y,
-            })?,
-            3 | 4 => {
-                let button = if kind == 3 { 0 } else { 2 };
-                self.input.send(InputEvent::PointerMove { x, y })?;
-                self.input.send(InputEvent::PointerButton {
-                    button,
-                    pressed: true,
-                    x,
-                    y,
-                })?;
-                self.input.send(InputEvent::PointerButton {
-                    button,
-                    pressed: false,
-                    x,
-                    y,
-                })?;
-            }
-            5 => self.input.send(InputEvent::Wheel {
-                delta_x: delta.0.clamp(-10_000., 10_000.),
-                delta_y: delta.1.clamp(-10_000., 10_000.),
-            })?,
-            _ => {}
+        let size = renderer.surface_size();
+        Some((
+            (f64::from(size.width), f64::from(size.height)),
+            crate::renderer::viewport(size, renderer.video_size),
+            renderer.max_viewport(),
+        ))
+    }
+
+    fn set_zoom(&mut self, zoom: Zoom) {
+        if zoom != self.zoom {
+            self.zoom = zoom;
+            self.redraw = true;
+        }
+        zoom::publish(self.zoom.scale());
+    }
+
+    /// Kind 15 is one pinch step: focal point in surface pixels and the
+    /// incremental scale ratio. Kind 16 ends the pinch; 17 resets zoom.
+    fn handle_zoom(&mut self, kind: i32, focal: (f64, f64), ratio: f64) {
+        let mut zoom = self.zoom;
+        match (kind, self.layout()) {
+            (15, Some((surface, fit, limit))) => zoom.pinch(focal, ratio, surface, fit, limit),
+            (15, None) => {}
+            (16, _) => zoom.end(),
+            _ => zoom.reset(),
+        }
+        self.set_zoom(zoom);
+    }
+
+    fn handle_touch(&mut self, kind: i32, pos: (f64, f64), delta: (f64, f64)) -> Result<(), Error> {
+        let layout = self.layout();
+        let viewport = layout.map_or((0., 0., 0., 0.), |(surface, fit, _)| {
+            self.zoom.rect(surface, fit)
+        });
+        for event in self.touch.events(kind, pos, delta, viewport) {
+            self.input.send(event)?;
+        }
+        // A trackpad cursor moved past the zoomed edge pans the view after it.
+        if let (8, Some((surface, fit, _))) = (kind, layout) {
+            let mut zoom = self.zoom;
+            zoom.reveal(self.touch.cursor(), surface, fit);
+            self.set_zoom(zoom);
         }
         Ok(())
     }
@@ -270,7 +323,12 @@ impl AndroidViewer {
             &mut self.submitted,
             &mut self.last_ready_age_ms,
         )?;
-        renderer.draw(output)?;
+        if renderer.video_size != self.zoom_video {
+            self.zoom_video = renderer.video_size;
+            self.zoom = Zoom::default();
+            zoom::publish(1.);
+        }
+        renderer.draw(output, &self.zoom)?;
         self.redraw = false;
         if self.last_stats.elapsed() >= Duration::from_secs(1) {
             let frames = self.frames.lock().map_err(|_| "decoded queue poisoned")?;
@@ -365,8 +423,35 @@ fn start_session(emitter: Box<dyn Fn(String) -> io::Result<()> + Send + Sync>) {
     }
 }
 
+pub(crate) fn send_view_input(events: Vec<InputEvent>) {
+    // Use the same ordered queue as the pointer, including modifier + click.
+    send_render(RenderCommand::ViewInput(events));
+}
+
 fn send_command(raw: &str) {
     match serde_json::from_str::<Command>(raw) {
+        #[cfg(target_os = "android")]
+        Ok(Command::Input {
+            event: InputEvent::ReleaseAll,
+        }) => {
+            send_render(RenderCommand::Touch {
+                kind: 6,
+                x: 0.,
+                y: 0.,
+                dx: 0.,
+                dy: 0.,
+            });
+        }
+        Ok(Command::Input { event }) => send_view_input(vec![event]),
+        Ok(Command::Text {
+            text,
+            paste_code,
+            paste_shift,
+        }) => {
+            if let Some(events) = crate::input_text::paste_events(text, paste_code, paste_shift) {
+                send_view_input(events);
+            }
+        }
         Ok(command) => {
             let tx = active_slot()
                 .lock()
@@ -603,32 +688,25 @@ pub extern "C" fn deskfleet_ios_stop() {
 }
 
 #[cfg(target_os = "ios")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn deskfleet_ios_surface_created(
-    layer: *mut std::ffi::c_void,
+pub(crate) fn attach_video_layer(
+    layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>,
     width: u32,
     height: u32,
 ) {
-    if let Some(layer) = std::ptr::NonNull::new(layer) {
-        // SAFETY: Caller guarantees `layer` is a live `CAMetalLayer` object.
-        let window = unsafe { NativeWindow::retain_layer(layer) };
-        send_render(RenderCommand::SurfaceAttached {
-            window,
-            width: width.max(1),
-            height: height.max(1),
-        });
-    }
+    send_render(RenderCommand::SurfaceAttached {
+        window: NativeWindow::from_layer(layer),
+        width,
+        height,
+    });
 }
 
 #[cfg(target_os = "ios")]
-#[unsafe(no_mangle)]
-pub extern "C" fn deskfleet_ios_surface_changed(width: u32, height: u32) {
+pub(crate) fn resize_video_layer(width: u32, height: u32) {
     send_render(RenderCommand::SurfaceResized { width, height });
 }
 
 #[cfg(target_os = "ios")]
-#[unsafe(no_mangle)]
-pub extern "C" fn deskfleet_ios_surface_destroyed() {
+pub(crate) fn detach_video_layer() {
     send_render(RenderCommand::SurfaceDestroyed);
 }
 

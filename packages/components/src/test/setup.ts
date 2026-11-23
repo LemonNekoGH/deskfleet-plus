@@ -1,7 +1,7 @@
 import { configureClient } from "@deskfleet/client/platform"
 import { afterEach, vi } from "vitest"
-import type { DeskfleetDesktopApi } from "../../../client/src/desktop-api.ts"
-import { AGENT_PROVIDER_TEMPLATES } from "../../../../apps/daemon/src/provider-protocol.ts"
+import type { DeskfleetDesktopApi } from "@deskfleet/client/desktop-api"
+import { AGENT_PROVIDER_TEMPLATES } from "@deskfleet/protocol/provider"
 import { loadProviderIcons } from "../services/provider-icons.ts"
 
 if (document.compatMode !== "CSS1Compat") {
@@ -57,9 +57,10 @@ const api: DeskfleetDesktopApi = {
     getRemoteAgentSettings: async () => ({ allowRead: false, allowOperate: false }),
     setRemoteAgentSettings: async (settings) => settings,
     setKeepAwake: async (enabled) => ({ enabled }),
-    getAutoDownloadUpdates: async () => ({ enabled: true, pauseOnMetered: true, installSource: "desktop_installer" }),
-    setAutoDownloadUpdates: async (enabled) => ({ enabled, pauseOnMetered: true, installSource: "desktop_installer" }),
-    setPauseUpdatesOnMetered: async (pauseOnMetered) => ({ enabled: true, pauseOnMetered, installSource: "desktop_installer" }),
+    getAutoDownloadUpdates: async () => ({ enabled: true, pauseOnMetered: true, installOnQuit: true, installSource: "desktop_installer" }),
+    setAutoDownloadUpdates: async (enabled) => ({ enabled, pauseOnMetered: true, installOnQuit: true, installSource: "desktop_installer" }),
+    setPauseUpdatesOnMetered: async (pauseOnMetered) => ({ enabled: true, pauseOnMetered, installOnQuit: true, installSource: "desktop_installer" }),
+    setInstallUpdatesOnQuit: async (installOnQuit) => ({ enabled: true, pauseOnMetered: true, installOnQuit, installSource: "desktop_installer" }),
     getWorktreeRoot: async () => ({ root: null, defaultRoot: "/home/user/.deskfleet/worktrees" }),
     getWorktreePreferences: async () => ({ branchNaming: "semantic", cleanup: { archived: true, merged: true, inactive: true, inactiveDays: 5, settled: true, settledDays: 6, unchanged: true, keepLocalChanges: "uncommitted" } }),
     setWorktreePreferences: async (settings) => settings,

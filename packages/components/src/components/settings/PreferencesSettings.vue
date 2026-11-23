@@ -8,6 +8,7 @@ import AutoDownloadUpdatesSettings from "./AutoDownloadUpdatesSettings.vue"
 import AndroidWirelessAdbSettings from "./AndroidWirelessAdbSettings.vue"
 import KeepAwakeSettings from "./KeepAwakeSettings.vue"
 import LaunchAtStartupSettings from "./LaunchAtStartupSettings.vue"
+import LinuxKeyringSettings from "./LinuxKeyringSettings.vue"
 import LocalAgentSettings from "./LocalAgentSettings.vue"
 import RemoteAgentSettings from "./RemoteAgentSettings.vue"
 import DictationSettings from "./DictationSettings.vue"
@@ -74,6 +75,7 @@ if (client.platform === "web" && client.updates) {
       <LaunchAtStartupSettings />
       <KeepAwakeSettings />
       <AutoDownloadUpdatesSettings />
+      <LinuxKeyringSettings />
       <RemoteAgentSettings />
       <LocalAgentSettings />
     </div>

@@ -13,7 +13,7 @@ backend APIs. Remote Agent interaction, Git, files, terminals, and desktop
 streams use WebRTC. Electron uses a direct authenticated channel for Agent, Git,
 and terminal messages on its registered local machine.
 
-The daemon runs from source, as a SEA executable, or inside the Electron main
+The daemon runs from source, as a standalone Bun executable, or inside the Electron main
 process. It owns ACP providers, the shared backlog, steering, permissions,
 Session archive/restore, and native media. Electron retains a sandboxed renderer
 and stays in the tray after its windows close. The local discovery socket serves
@@ -25,7 +25,7 @@ transports to the account client and hosted daemon's backend connections. Both
 follow the system proxy configuration, including PAC, without proxy environment
 variables. Account and machine authentication remain bearer-based in the main
 process; these connections do not use the renderer's session cookies. Web clients
-use browser networking, and the standalone daemon uses Node's networking stack.
+use browser networking, and the standalone daemon uses Bun's networking stack.
 
 The Linux, Windows, and macOS desktop clients open remote desktops in a separate
 native viewer process by default. Native Android/iOS clients use their native
@@ -36,11 +36,19 @@ and GPU presentation. The machine daemon continues running inside Electron's
 main process. Native viewer closure releases that viewing session without
 changing the daemon's lifetime.
 
-The native desktop viewer uses a GPUI host with a pure-Rust NSH floating
-toolbar. Its video scene and toolbar share one window compositor; decoded pixels
-stay in Rust and never pass through the NSH engine. The toolbar uses the shared
-desktop translations and theme, with display selection, control settings,
-pause/resume, full screen, and disconnect/reconnect. One viewer process keeps
+Native viewers share a pure-Rust NSH control surface: the floating toolbar, its
+Control, Config, and Monitor dropdowns, and the Hacker Keyboard use the same
+components, translations, theme, and typed actions. Desktop hosts these components
+in GPUI. Rust mounts the video surface, system IME editor, and NSH overlay inside
+an Android activity or iOS view controller. One Rust layout places and hit-tests
+the controls on both platforms. UIKit's Metal view receives hardware key presses
+and indirect pointer events. Android dispatches key and motion events from the
+activity. Both feed the same Rust viewer input queue and video coordinate mapping.
+Swift and Kotlin supply lifecycle, clipboard, and system IME adapters.
+Decoded pixels stay in Rust. Control gathers input (pointer, keyboards, shortcuts, clipboard, and
+mobile pinch zoom); Config gathers display, control permission, full screen, and
+the connection; Monitor shows receiver-side stream health.
+One desktop viewer process keeps
 its window while Electron replaces or stops the receiving peer. Per-window
 platform hooks forward physical keyboard positions through the existing input
 contract. The [native viewer guide](media.md) records runtime validation and
@@ -67,7 +75,7 @@ flowchart LR
 | Component | Responsibility | Implementation |
 | --- | --- | --- |
 | Central server | Team membership, machine registration, catalog, stored session history, presence, access control, signaling, and optional Web static hosting | Rust / Actix Web |
-| Machine daemon | Workspace configuration, agent supervision, ACP clients, terminals, Git access, and history synchronization | TypeScript library; Node.js SEA or bundled Electron host |
+| Machine daemon | Workspace configuration, agent supervision, ACP clients, terminals, Git access, and history synchronization | TypeScript library; standalone Bun or bundled Electron host |
 | Native libraries | OS integration and performance-sensitive transport, capture, input, and media work | Rust with napi-rs bindings |
 | Desktop application | User interface, platform integration, and daemon installation/management | Electron / TypeScript |
 | Native desktop viewer | Default independent remote desktop window for desktop clients, receiving media, input forwarding, and bounded decoded-frame queue | Rust / NSH / GPUI; platform H.264, HEVC, and AV1 decoding |
@@ -82,10 +90,10 @@ offline; clients show when that data was last observed.
 The backend is open source in this repository under Apache-2.0. Shared resource
 and protocol types remain independent of Actix Web and Node-API.
 
-Optional Statsig integration belongs to the shared JavaScript frontend. Web and
-Electron renderers use a build-time client-public key for behavioral events and
-UI gates/experiments; an absent key disables the integration. Electron permits
-only the configured Statsig origins through its renderer Content Security Policy.
+Web and Electron share the optional Statsig integration for behavioral events
+and UI experiments. A build-time client-public key enables the renderer SDK.
+Electron permits only the configured Statsig origins through its renderer
+Content Security Policy.
 Verified billing conversions originate in the Rust server; a transactional
 billing outbox delivers them independently from payment reconciliation. Frontend
 actions and server conversions share account and Team identifiers.
@@ -140,6 +148,33 @@ authentication, checkout, and peer mutations are not automatically replayed.
 Catalog/history synchronization retains its own durable retry mechanism.
 Caller cancellation and daemon shutdown stop active requests and backoff waits.
 
+### Hosted Super Agent
+
+The optional `apps/super-agent` Node service runs a conversational coordinator
+using eve and its PostgreSQL Workflow world. Actix authenticates clients,
+authorizes Team access and binds every root eve Session to its owning Team.
+The API evaluates the Statsig `super_agent` rollout for the account and selected
+Team on every client request. Web and Electron discover the decision through
+the Team availability endpoint. The meter keeps settling accepted work after
+rollout removal. The server uses a private service credential for the runtime.
+On each message, Actix supplies the sender's login ID, Team and bound cloud
+Session to Eve's authenticated channel. Eve's DeskFleet MCP connection forwards
+the active turn's principal to the API. Each tool call resolves the active
+login and rechecks Team access, rollout and Session ownership. The API uses
+the shared remote MCP relay to reach the target registration. Target daemons
+recognize the cloud Session as a Super Agent source and check the host's
+`allowSuperAgent` setting on discovery and execution. This single opt-in
+grants the hosted tool catalog for that machine. Agents running on other
+machines use the host's separate remote Agent permissions.
+The cloud service owns conversation execution and replay. The control store owns Team membership,
+request receipts, Session bindings and the cloud token ledger. Each API instance
+can claim outstanding Session streams to meter. The cursor advances after the
+usage facts are durable. Each fact retains its raw token counts and the credits
+charged at first settlement, including when the stream is replayed after a rate
+change. [Super Agent setup](../../apps/super-agent/README.md) describes
+runtime configuration and the API, and [billing](identity-billing.md#monthly-credits)
+defines the allowance.
+
 ### Multiple API instances
 
 API instances share one PostgreSQL database and the same public service origin.
@@ -152,11 +187,16 @@ client events, and revocation notices use the same routing. An HTTP request and
 the daemon or client socket it addresses can land on different instances, without
 load-balancer affinity or a separate message broker.
 
-Machine reconnection atomically replaces the route. Connection identities fence
-late responses and disconnect cleanup from the old socket. A database failure
-or expired process lease stops that process from using its local sockets as
-authority. Closing signaling for recovery does not revoke an already authorized
-WebRTC connection or stop the daemon's execution.
+Machine reconnection atomically replaces the route. When an API instance
+replaces its own daemon socket, it retires RPCs already bound to the old
+connection as `503 machine_offline`, including requests forwarded by other API
+instances. The replacement accepts fresh work immediately after it becomes
+current. Connection identities fence late responses and disconnect cleanup from
+the old socket. The daemon may already have applied a command when its connection
+is replaced. Callers use operation receipts for commands that support them.
+A database failure or expired process lease stops that process from using its
+local sockets as authority. Closing signaling for recovery does not revoke an
+already authorized WebRTC connection or stop the daemon's execution.
 
 Control-plane congestion is scoped to its work, not interpreted as Machine
 offline. Each socket coalesces catalog, roster, and presence invalidations
@@ -955,7 +995,7 @@ Existing installs retain their saved preference. The app bundles
 `@deskfleet/daemon` and starts it in its own main process, with the bundled native addon and runtime. The daemon's lifetime is the
 app's: it keeps running while the app sits in the tray with no windows, and the
 app waits for its cleanup before exiting. The app never spawns a separate daemon
-process. The standalone Node.js SEA is the headless distribution of the same
+process. The standalone Bun executable is the headless distribution of the same
 daemon and runs independently of any desktop app.
 
 On Windows, an optional Rust desktop service supplies access to an already
@@ -1098,10 +1138,11 @@ every 30 minutes, including while hidden in the tray. Settings → Updates displ
 the installed version and offers an explicit check against the same feed. Opening
 the page only reads updater state; checking never authorizes installation.
 Preferences enables automatic background downloads by default. When enabled,
-it also exposes **Pause on metered networks**, defaulting on and retaining its
-value when automatic downloads are disabled. The main process persists both
-preferences in `updates.json`. Existing preferences without a metered choice
-use the default.
+Preferences also shows **Pause on metered networks** and, on desktop, **Install
+updates on quit**. Both sub-preferences default to on and keep their values when
+automatic downloads are disabled. The main process saves these preferences in
+`updates.json`. Existing files without one of the sub-preferences use the
+default.
 
 Before an automatic download, the native library reads the current OS network
 cost: NetworkManager's primary connection on Linux, Windows connection cost,
@@ -1112,17 +1153,28 @@ background transfer without an install error; an unmetered connection starts it
 again. Disabling automatic downloads also cancels an active background transfer.
 Explicit installation permits downloading regardless of network cost or the
 automatic-download preference, including a background transfer it has joined.
-The main process owns
-the updater and its state; the sandboxed renderer reads snapshots and subscribes
-through a narrow preload API. The lower-left sidebar offers an update only when
-a newer stable version is available. Clicking downloads the update, reports
-progress, closes the hosted daemon and peer services, and then lets the updater
-install and restart the app. Failed downloads or installation preparation can
-be retried. If installation fails after services have stopped, retry the update
-or quit and reopen the app before continuing work. Ordinary app shutdown never
-installs a downloaded update. Web clients
-and development launches do not check for desktop updates. Release artifacts and
-feed metadata are described in [CI notes](ci.md#tagged-releases).
+The main process owns the updater and its state. The sandboxed renderer reads
+snapshots and subscribes through a narrow preload API. When **Install updates
+on quit** is disabled, the lower-left sidebar offers an update whenever a newer
+stable version is available. When **Install updates on quit** is enabled, the
+sidebar stays hidden unless installation fails, while Settings → Updates still
+shows status and lets the user install immediately. Clicking **Update and
+restart** downloads the update if needed, closes the hosted daemon and peer
+services, and then installs and restarts the app.
+
+When **Install updates on quit** is enabled and the user quits from the tray,
+the tray hides and the main process closes hosted services immediately. If a
+background download is still running, the main process waits for that download
+to finish before running a silent install without relaunching. If the user
+launches DeskFleet again during that wait, the main process cancels the
+download and relaunches DeskFleet. OS shutdown, process signals, and in-app
+restarts skip quit installation. When a downloaded update is ready to install on
+quit, the tray quit item shows the target version. Failed downloads or
+installation preparation can be retried. If installation fails after services
+have stopped, retry the update or quit and reopen the app before continuing
+work. Web clients and development launches do not check for desktop updates.
+Release artifacts and feed metadata are described in
+[CI notes](ci.md#tagged-releases).
 
 The Capacitor Android client uses the same update interface, checking at launch
 and whenever the app returns to the foreground, and chooses its update backend
@@ -1225,14 +1277,17 @@ method during startup. Settings uses Tencent's standalone installer and a
 separate login terminal, so installation does not require system Node.js/npm.
 The CodeBuddy edition switch writes the existing provider environment setting:
 `internal` for China and `public` for international, shared by setup and sessions.
-The DeepSeek Harness template launches the bundled CLI as `dsh --profile acp`;
-an explicit binary path selects an external CLI. `packages/dsh-runtime` owns
-source and packaged launch resolution, deployment, and runtime smoke checks.
-Source launches resolve its installed dependency tree without staging. Desktop
-runs dsh in an Electron Node-mode child process and ships the complete pinned
-package tree in resources; standalone releases carry that tree and a private
-Node executable beside the SEA daemon. The immutable runtime is shared by
-registrations, while provider environment overrides remain registration-owned.
+The DeepSeek Harness template launches `dsh --profile acp`. The headless
+daemon discovers an installed CLI on the executing machine. An explicit binary
+path selects a specific external CLI. DeskFleet Desktop runs bundled dsh in an
+Electron Node-mode child process and ships the pinned package tree in resources.
+`packages/dsh-runtime` owns the Desktop launch, deployment, and runtime smoke
+checks. The immutable runtime is shared by registrations, while provider
+environment overrides remain registration-owned.
+Automatic discovery on headless daemons supplies a registration-local
+`DSH_HOME` unless the provider has configured one explicitly. An explicit
+binary path leaves the external CLI's environment and credentials under
+operator control.
 Bundled login, credential detection, and ACP launches share a credential file
 under the registration directory. Their Harness home, profiles, and persisted
 session history stay in their existing locations. An explicit provider `DSH_HOME`
@@ -1259,9 +1314,9 @@ initialization, session creation and forking, prompts, cancellation, and session
 The SDK's unstable profile supplies `session/fork`; the negotiated ACP protocol
 version remains `1`, and forking requires the provider's advertised capability.
 Each bundled adapter uses the installed CLI and its credentials. Adapters run as
-child processes; the SEA executable reuses its bundled Node runtime.
+child processes; the headless executable reuses its embedded Bun runtime.
 The generic ACP template launches a stdio ACP executable directly. Empty binary
-paths use the bundled DeepSeek runtime or the template default (`codex`, `claude`,
+paths use the host's DeepSeek runtime selection or the template default (`codex`, `claude`,
 `agent`, `grok`, `pi`, `omp`, `codebuddy`, `agy`, or `acp-agent`), and configured environment
 values extend the executing daemon's inherited environment. New installations
 start with no configured providers; users add them in Settings → Agents using
@@ -1815,11 +1870,11 @@ core-crate, binding, and TypeScript-service structure. Native operations must
 avoid blocking Node's event loop. Keep capture and encoding data in native code
 where passing frames through JavaScript would add unnecessary copies.
 
-Node.js SEA packages the daemon and native addon with the pinned Node runtime.
-The addon is extracted to a private temporary directory before loading. See the
+Bun packages the daemon and native addon with the pinned runtime.
+Bun loads the embedded addon through Node-API. See the
 [daemon guide](../../apps/daemon/README.md) for packaging and platform support.
 Desktop builds bundle the same daemon library with Electron and an unpacked
-native addon. Neither distribution requires an external Node installation.
+native addon. Both distributions include their JavaScript runtime.
 Agent adapters and external tools may have their own runtime requirements.
 
 Desktop capability is optional and initialized on demand. Missing displays or
@@ -1836,7 +1891,7 @@ The Rust workspace contains:
 | `deskfleet-model` | Resource IDs, directory bindings, and session associations |
 | `deskfleet-store` | SeaORM entities and transactional catalog persistence |
 | `deskfleet-migration` | Catalog schema migrations and optional migration CLI |
-| `deskfleet-protocol` | Shared wire contracts and protocol version |
+| `deskfleet-protocol` | Central wire contracts, protocol version, and generated TypeScript control types |
 | `deskfleet-control-store` | PostgreSQL central identity, authorization, catalog, and history persistence |
 | `deskfleet-native` | Native capabilities independent of Node.js |
 | `deskfleet-capture` | Native display capture and retained GPU surfaces |
@@ -1856,18 +1911,35 @@ The Rust workspace contains:
 
 Dependencies flow `server -> protocol -> model`, `server -> control-store -> protocol`,
 `node -> store -> model/migration` for local catalog persistence,
-`node -> native -> capture/encoder/input`, and
-`@deskfleet/daemon -> @deskfleet/native`. Linux capture/input delegate to
+`node -> native -> capture/encoder/input`,
+`@deskfleet/daemon -> @deskfleet/native`, and every TypeScript package that
+speaks a wire contract `-> @deskfleet/protocol`. Linux capture/input delegate to
 `linux-desktop`, `wayland`, and `x11`. Linux capture and video pipelines use
 `gstreamer-media`; Windows and macOS encoding also use its optional x264 pipeline
 after native H.264 hardware startup fails. Capture ownership stays with the
 native worker, which reads back surfaces only for software encoding.
 The pnpm workspace contains the daemon,
-Electron and Web applications, the native package, `packages/client` for shared
-contracts/transports, `packages/components` for Vue UI, stores, and routes, and
-`packages/mcp` for the independent Agent tool server.
-TypeScript control wire types derive from the Rust protocol crate; napi
-declarations describe the native API separately.
+Electron and Web applications, the native package, `packages/protocol` for wire
+contracts, `packages/client` for client stores and transports,
+`packages/components` for Vue UI, stores, and routes, `packages/agents/*` for
+provider adapters, and `packages/mcp` for the independent Agent tool server.
+
+`@deskfleet/protocol` is the only home for TypeScript wire contracts: daemon IPC
+and WebRTC channel messages, Agent adapter contracts, and the pure validators
+both ends share. It is a platform-neutral leaf. It depends only on the ACP SDK
+and zod, imports no `node:` module or workspace package, and is type-checked
+without Node globals. Validation that needs the local host, such as absolute
+executable paths or local IPC framing, stays with the daemon. TypeScript central
+control types are generated from the Rust protocol crate into
+`packages/protocol/src/generated/`. Catalog and system records restate the napi
+declarations, and the daemon's `native-contracts.ts` fails type checking when
+the two drift apart.
+
+Workspace packages import each other by package name through declared
+`exports`; relative paths stay inside one package. `mise run
+check:package-boundaries` enforces this for shipped source and keeps the
+protocol package a leaf. Tests, fixtures, and tool configuration may reach
+into other packages but must still declare the dependency.
 
 `PROTOCOL_VERSION` stays at `1` until the first freeze is explicitly declared.
 Contracts evolve in place, including incompatible changes. Do not add version
@@ -1906,7 +1978,7 @@ work. Linux Wayland and X11 capture share the existing GStreamer encoding path.
 - [ACP capabilities](https://agentclientprotocol.com/protocol/v1/initialization)
 - [ACP session setup](https://agentclientprotocol.com/protocol/v1/session-setup)
 - [WebRTC connectivity](https://webrtc.org/getting-started/peer-connections)
-- [Node.js SEA native addons](https://nodejs.org/api/single-executable-applications.html#using-native-addons-in-the-injected-main-script)
+- [Bun embedded Node-API addons](https://bun.com/docs/compiler/executables#embed-n-api-addons)
 - [Node-API ABI boundaries](https://nodejs.org/api/n-api.html#implications-of-abi-stability)
 - [Electron sandboxing](https://www.electronjs.org/docs/latest/tutorial/sandbox)
 - [Heron napi crate](https://github.com/minori-live/heron/blob/main/crates/dsp-node/Cargo.toml)

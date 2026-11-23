@@ -39,6 +39,8 @@ class LocalRemoteAgentSettingsTest {
                 allowOperate = false,
                 allowSessions = true,
                 allowWorkspaces = true,
+                allowSuperAgent = true,
+                allowLocalCrossWorkspace = true,
             ),
         )
 
@@ -48,6 +50,8 @@ class LocalRemoteAgentSettingsTest {
                 allowOperate = false,
                 allowSessions = true,
                 allowWorkspaces = true,
+                allowSuperAgent = true,
+                allowLocalCrossWorkspace = true,
             ),
             updated,
         )
@@ -58,6 +62,8 @@ class LocalRemoteAgentSettingsTest {
         assertEquals(false, persisted.getBoolean("allowOperate"))
         assertEquals(true, persisted.getBoolean("allowSessions"))
         assertEquals(true, persisted.getBoolean("allowWorkspaces"))
+        assertEquals(true, persisted.getBoolean("allowSuperAgent"))
+        assertEquals(true, persisted.getBoolean("allowLocalCrossWorkspace"))
         assertFalse(dataDir.listFiles().orEmpty().any { it.name.endsWith(".tmp") })
     }
 
@@ -73,6 +79,21 @@ class LocalRemoteAgentSettingsTest {
                 allowOperate = false,
                 allowSessions = false,
                 allowWorkspaces = false,
+                allowSuperAgent = false,
+                allowLocalCrossWorkspace = false,
+            ),
+            store.read(),
+        )
+
+        file.writeText("""{"allowSuperAgent":true,"allowLocalCrossWorkspace":true}""")
+        assertEquals(
+            RemoteAgentSettingsState(
+                allowRead = false,
+                allowOperate = false,
+                allowSessions = false,
+                allowWorkspaces = false,
+                allowSuperAgent = true,
+                allowLocalCrossWorkspace = true,
             ),
             store.read(),
         )

@@ -9,12 +9,16 @@ internal data class RemoteAgentSettingsState(
     val allowOperate: Boolean = false,
     val allowSessions: Boolean = false,
     val allowWorkspaces: Boolean = false,
+    val allowSuperAgent: Boolean = false,
+    val allowLocalCrossWorkspace: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("allowRead", allowRead)
         .put("allowOperate", allowOperate)
         .put("allowSessions", allowSessions)
         .put("allowWorkspaces", allowWorkspaces)
+        .put("allowSuperAgent", allowSuperAgent)
+        .put("allowLocalCrossWorkspace", allowLocalCrossWorkspace)
 }
 
 /**
@@ -65,22 +69,38 @@ internal class LocalRemoteAgentSettings(private val dataDir: File) {
             LocalRemoteAgentSettings(File(filesDir, "linux/data"))
 
         fun fromJson(json: JSONObject): RemoteAgentSettingsState {
-            val allowedKeys = setOf("allowRead", "allowOperate", "allowSessions", "allowWorkspaces")
+            val allowedKeys = setOf(
+                "allowRead",
+                "allowOperate",
+                "allowSessions",
+                "allowWorkspaces",
+                "allowSuperAgent",
+                "allowLocalCrossWorkspace",
+            )
+            val headlessOptionalOnlyKeys = setOf("allowSuperAgent", "allowLocalCrossWorkspace")
+            val presentKeys = mutableListOf<String>()
             val keys = json.keys()
             while (keys.hasNext()) {
-                if (keys.next() !in allowedKeys) {
+                val key = keys.next()
+                if (key !in allowedKeys) {
                     throw IllegalArgumentException(VALIDATION_ERROR)
                 }
+                presentKeys.add(key)
             }
-            val allowRead = requireBoolean(json, "allowRead")
-            val allowOperate = requireBoolean(json, "allowOperate")
+            val headlessPartial = presentKeys.isNotEmpty() && presentKeys.all { it in headlessOptionalOnlyKeys }
+            val allowRead = if (headlessPartial) false else requireBoolean(json, "allowRead")
+            val allowOperate = if (headlessPartial) false else requireBoolean(json, "allowOperate")
             val allowSessions = optionalBoolean(json, "allowSessions")
             val allowWorkspaces = optionalBoolean(json, "allowWorkspaces")
+            val allowSuperAgent = optionalBoolean(json, "allowSuperAgent")
+            val allowLocalCrossWorkspace = optionalBoolean(json, "allowLocalCrossWorkspace")
             return RemoteAgentSettingsState(
                 allowRead = allowRead,
                 allowOperate = allowOperate,
                 allowSessions = allowSessions,
                 allowWorkspaces = allowWorkspaces,
+                allowSuperAgent = allowSuperAgent,
+                allowLocalCrossWorkspace = allowLocalCrossWorkspace,
             )
         }
 

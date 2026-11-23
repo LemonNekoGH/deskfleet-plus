@@ -1,5 +1,5 @@
 <script lang="ts">
-import type { AgentEvent, AgentInput, AgentSnapshot } from "../../../../../apps/daemon/src/agent-protocol.ts"
+import type { AgentEvent, AgentInput, AgentSnapshot } from "@deskfleet/protocol/agent"
 import type { ConversationEntry } from "../../services/agent-conversation.ts"
 
 interface OutlineItem {
@@ -96,8 +96,9 @@ function plainText(content: AgentInput["content"]): string {
 }
 
 const projection = useConversationProjection(() => props.events ?? [], () => props.snapshot)
+const hasConversation = computed(() => props.projection !== undefined || !!(props.events && props.snapshot))
 const items = computed<OutlineItem[]>(previous => {
-  if (!props.events || !props.snapshot) return PREVIEW_ITEMS
+  if (!hasConversation.value) return PREVIEW_ITEMS
   const result: OutlineItem[] = []
   for (const entry of props.projection ?? projection.value) {
     if (entry.kind === "input") {
@@ -115,7 +116,7 @@ const items = computed<OutlineItem[]>(previous => {
   }) ? previous : result
 })
 
-const currentActive = computed(() => props.active || (!props.events ? selectedPreview.value : undefined))
+const currentActive = computed(() => props.active || (!hasConversation.value ? selectedPreview.value : undefined))
 const pointedId = computed(() => scrub.value?.item.id ?? hovered.value)
 const pointedIndex = computed(() => items.value.findIndex(item => item.id === pointedId.value))
 const activeId = computed(() => scrub.value?.item.id ?? currentActive.value)
@@ -133,7 +134,7 @@ function tickWidth(index: number, label: string): number {
 }
 
 function onSelect(id: string): void {
-  if (!props.events) selectedPreview.value = id
+  if (!hasConversation.value) selectedPreview.value = id
   emit("select", id)
 }
 
@@ -231,7 +232,14 @@ const { fadeStyle } = useScrollFade(list, { size: "sm" })
 watch(currentActive, id => {
   if (scrub.value) return
   const index = items.value.findIndex(item => item.id === id)
-  rows.value?.[index]?.scrollIntoView({ block: "nearest" })
+  const row = rows.value?.[index]
+  const scroller = list.value
+  if (!row || !scroller) return
+  // The list is the rows' offset parent. Leave enclosing scroll areas undisturbed.
+  const top = row.offsetTop
+  const bottom = top + row.offsetHeight
+  if (top < scroller.scrollTop) scroller.scrollTop = top
+  else if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight
 }, { flush: "post" })
 </script>
 
@@ -245,7 +253,7 @@ watch(currentActive, id => {
       <div class="ui-scroll-mask flex min-h-0 flex-col" :style="fadeStyle">
         <ol
           ref="list"
-          class="ui-outline-list pointer-events-auto min-h-0 select-none overflow-x-hidden overflow-y-auto scrollbar-none"
+          class="ui-outline-list pointer-events-auto relative min-h-0 select-none overflow-x-hidden overflow-y-auto scrollbar-none"
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
           @pointerup="stopScrub"

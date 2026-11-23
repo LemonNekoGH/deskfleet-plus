@@ -1,4 +1,4 @@
-import { FILE_CHUNK_BYTES, type FileEndpoint, type FileEntry } from "../../../apps/daemon/src/files-protocol.ts"
+import { FILE_CHUNK_BYTES, type FileEndpoint, type FileEntry } from "@deskfleet/protocol/files"
 import { filePathToUri, type FileAttachmentUploadOptions, type FileAttachmentUploadRequest, type FileAttachmentUploadResult, type FileConflict, type FileListing, type FileReadResourceOptions, type FileResourceRequest, type FilesApi, type FileTarget, type FileTransfer, type FileTransferRequest } from "./files.ts"
 import { copyFileChunks, writeBufferChunks } from "./file-pipeline.ts"
 
@@ -16,7 +16,7 @@ function mimeType(name: string): string {
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     html: "text/html", htm: "text/html",
-    pdf: "application/pdf", json: "application/json", txt: "text/plain", md: "text/plain", csv: "text/plain", ts: "text/plain", js: "text/plain", rs: "text/plain", py: "text/plain",
+    pdf: "application/pdf", json: "application/json", txt: "text/plain", md: "text/plain", csv: "text/csv", ts: "text/plain", js: "text/plain", rs: "text/plain", py: "text/plain",
   } as Record<string, string>)[extension] ?? "application/octet-stream"
 }
 

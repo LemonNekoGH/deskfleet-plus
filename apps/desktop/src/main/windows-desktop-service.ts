@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { app, ipcMain, type BrowserWindow, type WebContents } from "electron"
-import { WINDOWS_DESKTOP_SERVICE_CHANNEL } from "../../../../packages/client/src/windows-desktop-service.ts"
+import { WINDOWS_DESKTOP_SERVICE_CHANNEL } from "@deskfleet/client/windows-desktop-service"
 import { isDesktopMediaSender } from "./desktop-media.ts"
 import { WindowsDesktopServiceController } from "./windows-desktop-service-controller.ts"
 
@@ -23,6 +23,7 @@ export function installWindowsDesktopServiceIpc(controller: WindowsDesktopServic
     }
     try {
       if (method === "get") return { ok: true, value: await controller.get() }
+      if (method === "update") return { ok: true, value: await controller.update() }
       if (method !== "setEnabled") throw new Error("Unknown Windows desktop service operation")
       if (typeof enabled !== "boolean") throw new Error("Windows desktop service setting must be a boolean")
       return { ok: true, value: await controller.setEnabled(enabled) }
@@ -38,12 +39,13 @@ export function installWindowsDesktopService(): WindowsDesktopServiceController 
     ? join(process.resourcesPath, "windows", "deskfleet-desktop-service.exe")
     : join(import.meta.dirname, "../windows/deskfleet-desktop-service.exe")
   const controller = new WindowsDesktopServiceController(existsSync(executable), async command => {
-    // The helper owns UAC elevation. No renderer value becomes an executable, path,
-    // shell expression, or arbitrary service command.
+    // The helper owns UAC elevation and on-demand maintenance RPC. No renderer
+    // value becomes an executable, path, shell expression, or arbitrary command.
     const { stdout } = await execute(executable, [command], {
       windowsHide: true,
       maxBuffer: 64 * 1024,
       ...(command === "status" ? { timeout: 10_000 } : {}),
+      ...(command === "maintenance-update" ? { timeout: 90_000 } : {}),
     })
     return stdout
   })

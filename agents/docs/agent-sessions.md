@@ -57,7 +57,7 @@ Workspace is selected and remembers the last choice on that device.
 ### Git automation policy
 
 Daemon Git preparation, inspection, watchers, file-reference discovery, branch
-discovery, and generated-checkout lifecycle share `git-execution.ts`. Inherited
+discovery, and generated-checkout lifecycle share the daemon's `git/execution.ts`. Inherited
 `GIT_*` overrides are removed. Every invocation disables repository hooks and
 fsmonitor; diffs disable external commands and text conversion, and checkouts
 disable all discovered filter drivers. Only HTTPS, SSH, and local-file transports
@@ -396,10 +396,14 @@ methods are not passed to `authenticate`. DeskFleet does not add
 The Pi Coding Agent template runs the installed `pi` CLI through the bundled
 [`pi-acp`](https://github.com/svkozak/pi-acp) adapter, which starts Pi in RPC mode.
 It supports model and thinking-level selection and loading saved sessions.
-Pi executes its tools locally; the adapter does not delegate filesystem or
-terminal operations, forward client-provided MCP servers, or expose additional
-Workspace directories. Pi extension select/confirm requests use the permission
-UI; extension free-text input requests are unsupported.
+Pi executes its tools locally. Additional Workspace directories and ACP
+filesystem and terminal delegation are unsupported. The adapter registers
+client-provided stdio and Streamable HTTP MCP servers as direct tools when
+creating or loading a session. Enable Pi's built-in MCP support, introduced in
+0.99.0, to connect these servers. Legacy SSE is unsupported. An entry in Pi's own
+`mcp.json` takes precedence over an injected server with the same name.
+Pi extension select/confirm requests use the permission UI. Extension free-text
+input requests are unsupported.
 The Oh My Pi template runs the installed [`omp` CLI](https://omp.sh/docs/acp)
 directly as `omp acp`, using its existing provider keys or OAuth credentials.
 Its native ACP server advertises model and thinking configuration, Default and
@@ -469,6 +473,12 @@ terminal for interactive Google sign-in.
 The CLI uses the profile under `GEMINI_HOME`, with configuration at
 `~/.gemini/antigravity-cli/settings.json` by default. **Test Connection** uses
 existing credentials and reports authentication required when absent.
+`agy acp` can answer `session/prompt` with `end_turn` while non-daemon tool calls
+and child sessions still run. The provider wrapper keeps that turn open until
+those ACP-reported workers settle, so their approvals, live state, and input
+queue are not retired early, then completes with the foreground stop reason.
+The wait is bound to 30 minutes and ends immediately on cancellation or steering;
+daemon tool calls do not hold a turn.
 
 The ACP template
 runs an ACP-compatible executable directly over stdio, with `acp-agent` as its
@@ -875,10 +885,10 @@ the start of the message and enter the backlog. Other advertised commands remain
 in `/`. The daemon does not scan skill directories or infer universal skill
 invocation semantics.
 
-`composer-references.ts` owns file/Session discovery and resolution;
-`agent-composer-commands.ts` owns the initial command-notification wait. Shared
-`composer-mentions.ts` and `composer-prompt.ts` own token identities and prompt
-assembly. Both reference RPCs require `agent:execute` on the authenticated Agent
+The daemon's `agent/composer-references.ts` owns file/Session discovery and
+resolution; `agent/composer-commands.ts` owns the initial command-notification
+wait. Shared `composer-mentions.ts` and `composer-prompt.ts` own token
+identities and prompt assembly. Both reference RPCs require `agent:execute` on the authenticated Agent
 peer, return reference metadata rather than file contents, and do not write the
 journal. Provider prompts retain the existing submission and delivery audit.
 
@@ -1111,7 +1121,7 @@ Backpressure retries retain the same frame, and closing cancels pending delivery
 | `_deskfleet/session/configure` | Audit and apply model/reasoning/mode changes to a Session without changing its provider |
 | `_deskfleet/session/switch-agent` | Audit and replace a ready, idle Session's Agent, clear its provider conversation, and start the replacement; clients confirm the cache/context loss first |
 | `_deskfleet/session/subscribe` | Attach and return snapshot with `session.lastEventSeq` watermark |
-| `_deskfleet/session/history` | Page events after a sequence; up to 200 events per request. A DataChannel viewer may request `responseEncoding: "gzip"`; large compressible pages can then return `{ encoding: "gzip", data }`, with base64-encoded gzip JSON instead of the event array. The decoded page remains subject to the message byte limit. |
+| `_deskfleet/session/history` | Page events after a sequence. Defaults to 100 events and accepts up to 1,000. An ACP channel can shorten a page to fit its message byte limit. Continue from the final sequence in the page. A viewer may request `responseEncoding: "gzip"` to receive a large compressible page as `{ encoding: "gzip", data }` with base64-encoded gzip JSON. |
 | `_deskfleet/session/read` | A person acknowledges shared history through an observed `throughSeq`, with an operation ID; requires `agent:read` on peers and returns the updated snapshot |
 | `_deskfleet/session/unread` | A person rewinds the shared read watermark to just before the latest completion, with an operation ID; requires `agent:read` on peers and returns the updated snapshot |
 | `_deskfleet/git/status` | Inspect the Session's captured checkouts, branch/HEAD, and staged/unstaged/untracked files |
@@ -1382,21 +1392,22 @@ second and exclude uncommitted streaming previews. Storage failure falls back to
 the existing memory and history paths.
 
 Disk history is a display projection, never a daemon cursor or authorization
-source. It can appear before attachment, while background replay starts from the
-authoritative journal and replaces duplicate sequences. Cached content remains
-visible while pages arrive. State-dependent actions and read acknowledgements
-wait for synchronization. Account changes clear the previous account's cache;
-explicit deletion and refreshed catalog membership remove deleted histories.
+source. It can appear before attachment while the client reads the authoritative
+journal, and remains visible while pages arrive. State-dependent actions and
+read acknowledgements wait for synchronization. Account changes clear the
+previous account's cache. Explicit deletion and refreshed catalog membership
+remove deleted histories.
 This accelerates reopening the PWA after its account and machine scope load;
 it does not add offline sign-in or offline mutations.
 
 Subscribe installs an event buffer before reading the consistent snapshot. The
 response precedes buffered/live events. The client uses `session.lastEventSeq`
-as its snapshot watermark, reads earlier history in pages, deduplicates by
-Session/sequence within the catalog, and fills gaps before applying later events.
-Pending permissions are reissued on attachment with changes during the snapshot
-read accounted for. User questions are restored from the same snapshot and event
-stream. Buttons depend on the current persisted request state.
+as its snapshot watermark, collects earlier history in pages, and merges it with
+live events by Session and sequence within the catalog. The client publishes the
+assembled conversation in one update after filling gaps through the committed
+watermark. Pending permissions are reissued on attachment with changes during
+the snapshot read accounted for. User questions are restored from the same
+snapshot and event stream. Buttons depend on the current persisted request state.
 
 After the authorized subscription response, the daemon also replays its current
 uncommitted text tail through `_deskfleet/session/preview`. Each notification
@@ -1512,11 +1523,12 @@ continue to serve the existing idempotency contract. See the
 ### Remote history display
 
 Remote clients request retained central history while attaching to the daemon.
-The retained snapshot and event pages can populate the conversation before the
-peer connects, but do not advance the daemon journal cursor. Daemon history and
-live events replace this temporary display and remain authoritative, including
-for identical sequence numbers. Late retained responses cannot overwrite a
-received daemon snapshot or journal. A retained-history failure does not block
+The client assembles the retained event pages and can display them together with
+their snapshot before the peer connects. This display does not advance the daemon
+journal cursor. Daemon history and live events replace this temporary display
+and remain authoritative, including for identical sequence numbers. Late
+retained responses cannot overwrite a received daemon snapshot or journal.
+A retained-history failure does not block
 attachment; a failed attachment leaves already displayed history available.
 Local message channels and offline retained-history reads keep their existing
 single-source path. Source selection and catch-up state are internal; there is

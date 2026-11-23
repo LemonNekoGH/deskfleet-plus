@@ -1,8 +1,8 @@
 import { reactive } from "vue"
 import type { GithubRepositoryItem } from "@deskfleet/client/central"
-import type { AgentInput } from "../../../../apps/daemon/src/agent-protocol.ts"
-import { truncateGeneratedTitle } from "../../../../apps/daemon/src/titles.ts"
-import { filePathToUri, type FileEntry, type FilesApi, type FileTarget } from "../../../client/src/files.ts"
+import type { AgentInput } from "@deskfleet/protocol/agent"
+import { truncateGeneratedTitle } from "@deskfleet/protocol/titles"
+import { filePathToUri, type FileEntry, type FilesApi, type FileTarget } from "@deskfleet/client/files"
 import { githubReferenceLabel } from "./github-composer-reference.ts"
 
 export const PASTED_TEXT_LINE_THRESHOLD = 25
@@ -175,7 +175,7 @@ export function createMachineFileAttachment(entry: Pick<FileEntry, "name" | "pat
   return { id: crypto.randomUUID(), kind: "machine_file", name: entry.name, path: entry.path, uri: pathToFileUri(entry.path), size: entry.size }
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   let binary = ""
   const chunkSize = 0x8000
   for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {

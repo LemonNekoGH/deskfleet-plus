@@ -40,9 +40,10 @@ no release variable needs configuring. Local or custom builds may optionally
 set `VITE_SENTRY_RELEASE` to label their events.
 
 Tagged builds also set `VITE_SENTRY_DIST` to `web` or the packaging platform
-(`linux-x64`, `linux-arm64`, `macos-arm64`, `windows-x64`). It separates main
-bundles with identical filenames across platforms. Custom builds that upload
-maps must use the same release and distribution in the SDK and upload command.
+(`linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64`, `windows-x64`). This
+distinguishes main bundles with identical filenames across platforms. Custom
+builds that upload maps must use the same release and distribution in the SDK
+and upload command.
 
 PR, main, and manual Build runs do not bind the production environment and leave
 Sentry disabled. Keep production values out of repository and organization
@@ -134,11 +135,19 @@ This reporting path does not retry requests or change proxy/network selection.
 `withCentralRequestTrigger` creates immutable API views with `user`, `background`,
 or `unknown` attribution; concurrent requests do not share mutable trigger state.
 Automatic account/startup/reconnect loads, GitHub status polling, pinned-session
-metadata, scheduled-task polling, and session-read acknowledgements opt into
-`background`. Account actions, machine/workspace/provider/session mutations,
-terminal actions, and manual scheduled-task refreshes opt into `user`. Calls that
-can serve both automatic and interactive reads keep `unknown`; a GET or RPC name
-alone does not establish that a request runs in the background.
+metadata, task-notification monitoring, terminal list refreshes, scheduled-task
+polling, and session-read acknowledgements opt into `background`. Account actions,
+machine/workspace/provider/session mutations, terminal actions, and manual
+scheduled-task refreshes opt into `user`. Calls that can serve both automatic
+and interactive reads keep `unknown`; a GET or RPC name alone does not establish
+that a request runs in the background.
+
+A background `terminalList` or `systemStatus` HTTP 503 with the application code
+`machine_offline` is a normal refresh outcome when the control route disappears.
+It produces no Sentry event. HTTP 503 without that code, `machine_busy`,
+non-background `systemStatus` failures, and HTTP 504 follow normal reporting.
+The caller still receives the failure and retains its cached terminal list or
+battery reading until the next successful refresh.
 
 Only handled background network/timeouts, HTTP 429, and HTTP 5xx are collapsed.
 The first error is sent immediately. Matching failures within the next minute

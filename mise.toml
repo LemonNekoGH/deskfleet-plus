@@ -2,7 +2,7 @@ min_version = "2026.11.1"
 
 [settings]
 lockfile = true
-lockfile_platforms = ["linux-x64", "linux-arm64", "macos-arm64", "windows-x64"]
+lockfile_platforms = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64", "windows-x64"]
 
 [settings.npm]
 package_manager = "pnpm"
@@ -12,6 +12,7 @@ apm = "0.35.0"
 java = "temurin-21.0.13+9.0.LTS"
 rust = { version = "1.99.1", profile = "minimal", components = ["clippy", "rustfmt"], targets = ["aarch64-linux-android"] }
 node = "24.22.1"
+bun = "1.4.5"
 pnpm = "12.15.0"
 "npm:@informalsystems/quint" = "0.33.1"
 "cargo:cargo-shear" = "1.14.0"
@@ -32,6 +33,13 @@ run = "apm install --frozen"
 [tasks.dev]
 description = "Run the central API and Web client, including desktop login pages"
 depends = ["backend:dev", "web:dev"]
+
+[tasks."super-agent:build"]
+description = "Type-check and build the private eve Super Agent service"
+run = [
+  "pnpm --filter @deskfleet/super-agent typecheck",
+  "pnpm --filter @deskfleet/super-agent build",
+]
 
 [tasks."backend:dev"]
 description = "Run the Actix Web backend"
@@ -61,7 +69,8 @@ run = "nix build .#server-image --print-build-logs --out-link result-server-imag
 
 [tasks."backend:test"]
 description = "Run persistence, API, and TURN collection tests against TEST_DATABASE_URL and TEST_REDIS_URL"
-run = "cargo test -p deskfleet-control-store -p deskfleet-server --locked -- --ignored"
+# The Super Agent image smoke provisions its own PostgreSQL and Eve containers.
+run = "cargo test -p deskfleet-control-store -p deskfleet-server --locked -- --ignored --skip cloud_agent::tests::image::"
 
 [tasks."backend:smoke"]
 description = "Verify owned login, two authenticated daemons, WebRTC, and synchronized history against PostgreSQL"
@@ -90,7 +99,7 @@ run = "cargo run -p deskfleet-migration --features cli --locked --"
 
 [tasks.check]
 description = "Run TypeScript and Rust checks, tests, and debug builds"
-depends = ["check:static", "test", "rust:build", "desktop:build", "web:build", "docs:build"]
+depends = ["check:static", "test", "rust:build", "desktop:build", "web:build", "docs:build", "super-agent:build"]
 
 [tasks."check-fast"]
 description = "Run the Rust edit-loop checks"
@@ -118,8 +127,20 @@ depends = ["check:scripts", "check:daemon", "ci:check:desktop-main", "check:rust
 
 [tasks.build]
 description = "Build the release server and standalone daemon"
-depends = ["rust:release", "web:build", "dsh:stage"]
-run = "node scripts/build-sea.ts"
+depends = ["rust:release", "web:build"]
+run = "node scripts/build-daemon.ts"
+
+[tasks."build:macos-x64"]
+description = "Cross-compile the Intel macOS server and standalone daemon on Apple Silicon"
+depends = ["install"]
+run = [
+  'test "$(uname -sm)" = "Darwin arm64"',
+  "rustup target add x86_64-apple-darwin",
+  "cargo build --release --locked --target x86_64-apple-darwin --target-dir target -p deskfleet-node -p deskfleet-server",
+  "mkdir -p apps/daemon/dist/macos-x64",
+  "cp target/x86_64-apple-darwin/release/libdeskfleet_node.dylib apps/daemon/dist/macos-x64/deskfleet.node",
+  "node scripts/build-daemon.ts macos-x64",
+]
 
 [tasks."rust:release"]
 hide = true
@@ -152,16 +173,6 @@ description = "Run the standalone headless daemon from TypeScript"
 depends = ["native:debug"]
 run = "node apps/daemon/src/main.ts"
 
-[tasks."dsh:stage"]
-description = "Prepare DeepSeek Harness and private Node for the standalone distribution"
-depends = ["install"]
-run = "node packages/dsh-runtime/stage.ts node apps/daemon/dist/dsh"
-
-[tasks."dsh:smoke"]
-description = "Verify bundled DeepSeek Harness without system Node, npm, or dsh"
-depends = ["dsh:stage"]
-run = "node packages/dsh-runtime/smoke.ts apps/daemon/dist/dsh"
-
 [tasks."desktop:smoke-dsh"]
 description = "Verify DeepSeek Harness on Electron's Node host without staging or system Node"
 depends = ["install"]
@@ -172,12 +183,12 @@ description = "Verify the packaged Electron executable and DeepSeek resources af
 run = "node apps/desktop/scripts/smoke-dsh.ts --packaged"
 
 [tasks."daemon:pack"]
-description = "Package the daemon as a Node.js single executable"
-depends = ["native:release", "dsh:stage"]
-run = "node scripts/build-sea.ts"
+description = "Package the daemon as a Bun single executable"
+depends = ["native:release"]
+run = "node scripts/build-daemon.ts"
 
 [tasks."daemon:smoke"]
-description = "Verify an isolated SEA executable without an installed Node.js"
+description = "Verify the daemon executable without an installed JavaScript runtime"
 run = "node scripts/smoke-daemon.ts"
 
 [tasks."files:benchmark"]
@@ -406,11 +417,16 @@ run = "node scripts/check-rust-skills-harness.ts"
 description = "Validate pnpm patchedDependencies against Renovate and the lockfile"
 run = "node scripts/check-pnpm-patches.ts"
 
+[tasks."check:package-boundaries"]
+description = "Require package-name imports across workspace packages and keep the protocol package a neutral leaf"
+run = "node scripts/check-package-boundaries.ts"
+
 [tasks."check:static"]
 hide = true
 depends = [
     "check:rust-skills-harness",
     "check:pnpm-patches",
+    "check:package-boundaries",
     "check:types",
     "check:desktop-types",
     "web:typecheck",
@@ -435,7 +451,8 @@ hide = true
 depends = ["native:debug"]
 # Both suites create many SQLite catalogs; avoid competing for runner storage.
 wait_for = ["rust:test"]
-run = "node --test apps/daemon/src/*.test.ts packages/agents/*/src/*.test.ts packages/mcp/src/*.test.ts"
+# Node expands the quoted recursive pattern; POSIX shells would treat `**` as `*`.
+run = "node --test 'apps/daemon/src/**/*.test.ts' packages/agents/*/src/*.test.ts packages/mcp/src/*.test.ts packages/protocol/src/*.test.ts"
 
 [tasks."check:desktop"]
 hide = true
@@ -479,6 +496,9 @@ quint verify specs/route_fence.qnt --max-steps 6 --invariants \
   inv_route_identity inv_authority_follows_lease inv_snapshot_before_grant \
   inv_reconcile_closes_captured inv_one_snapshot inv_queue_bounded \
   inv_offer_stable inv_route_survives inv_inbox
+quint verify specs/rpc_replacement.qnt --max-steps 10 --invariants \
+  inv_pending_on_current_socket inv_reply_matches_admission \
+  inv_forwarded_failure_belongs_to_displaced_socket inv_old_close_keeps_new_route
 quint verify specs/mux_streams.qnt --max-steps 6 --invariants \
   inv_grant_stable inv_release_closes_streams inv_legacy_before_business \
   inv_accepted_work_survives
@@ -509,6 +529,7 @@ hide = true
 depends = [
     "check:rust-skills-harness",
     "check:pnpm-patches",
+    "check:package-boundaries",
     "rust:format:check",
     "rust:shear",
     "check:scripts",

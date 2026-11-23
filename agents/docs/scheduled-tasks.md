@@ -100,9 +100,9 @@ credential.
 
 The daemon injects its built-in `deskfleet` server through ACP `mcpServers` on
 each managed Session creation or resume. Its executable entry is bundled into
-both the headless SEA and Electron runtime as `--deskfleet-mcp`; no separately
-installed Node runtime is required for packaged applications. ACP requires
-stdio MCP support. Configuration probes do not receive execution authority.
+the standalone Bun executable and Electron runtime as `--deskfleet-mcp`.
+ACP requires stdio MCP support. Configuration probes do not receive execution
+authority.
 
 Each built-in grant binds the initiating user, machine, Workspace, and Session.
 Calls recheck current Team membership and the issuing Session's active state.
@@ -110,32 +110,47 @@ Provider shutdown, failed startup, archive, and daemon shutdown retire the
 grant. Tools expose the scoped catalog, Workspace creation (for machine-scoped
 Sessions), public provider identities, Session state/history/creation/prompting,
 and schedule list/create/update/delete/run operations. Workspace Sessions remain
-isolated to their own Workspace; machine-scoped Sessions can inspect all local
+isolated to their own Workspace by default; enabling **Allow Workspace sessions
+to delegate across local Workspaces** (`allowLocalCrossWorkspace` in
+`<host directory>/remote-agent-settings.json`, read live on every call) allows
+them to inspect sibling local Workspaces and list, inspect, create, or prompt
+Sessions in them while keeping Workspace creation and other machine-scoped
+Sessions isolated. Machine-scoped Sessions can inspect all local
 Workspaces, register new Workspaces, and inspect, create, or prompt Workspace
-Sessions without seeing other machine-scoped Sessions. Generated arguments
-cannot replace the actor or retrieve provider launch secrets. The separate
+Sessions without seeing other machine-scoped Sessions. When the built-in
+`deskfleet` server is attached and the provider supports system-prompt append
+(including Antigravity's `_meta.antigravity.systemPrompt.append`), the daemon
+appends concise instructions guiding the Agent to prefer DeskFleet MCP
+delegation over provider-native subagents. Generated arguments
+cannot replace the actor or retrieve provider launch secrets. Child Sessions
+created through `deskfleet_session_create` or `deskfleet_remote_session_create`
+inherit YOLO permission auto-approval by default when the issuing Session has
+YOLO enabled (passing `yolo: false` opts down to manual approval), and reject
+`yolo: true` when the issuing Session is not YOLO. The separate
 remote tools below extend discovery and operation to other machines without
 expanding a Workspace Session's local delegation.
 
 ## Cross-machine Agent access
 
-Desktop **Preferences → This computer** has four independent switches, all off
-by default: allow Agents on other machines to read this computer, allow them to
-operate it, allow them to start and message Sessions on it, and allow them to
-create Workspaces on it. Consent is stored in
-`<host directory>/remote-agent-settings.json` as
-`{"allowRead": false, "allowOperate": false, "allowSessions": false, "allowWorkspaces": false}`.
-A headless operator can set the same file. The preference applies across this
-host's registrations; every call still stays inside the source registration's
-Team and backend. A caller cannot choose another Team. Reading conversations,
-operating MCP tools, starting or messaging Sessions, and creating Workspaces are
-separate permissions.
+In desktop **Preferences → This computer**, **Allow Super Agent to use this
+computer** grants all hosted machine tools with one switch. Agents running on
+other machines have four independent switches for reading this computer,
+operating it, starting and messaging Sessions, and creating Workspaces.
+All switches default to off.
+
+Headless operators can edit `<host directory>/remote-agent-settings.json`.
+A file containing `{"allowSuperAgent": true}` enables hosted access. In an
+existing file, add that field alongside the machine-agent preferences. The
+preferences apply across the host's registrations. Every call stays within
+the initiating Session's Team and backend.
 
 The issuing daemon checks the active Session and its user's current membership,
 then calls `/api/daemon/mcp` with its own machine credential. The backend repeats
 membership checks for source and target, resolves the target's Team registration,
 and forwards a dedicated management RPC with the verified source Machine and
-Session. The target validates this context and reads the current host preference.
+Session. For hosted Super Agent calls, the backend identifies the source as
+the Team's hosted Session and forwards the initiating user's identity.
+The target validates this context and reads the current host preference.
 These internal RPCs are absent from the public management method allowlist.
 Machine discovery asks online targets for live consent with a five-second
 deadline per target and omits offline, denying, or unresponsive machines. A slow
@@ -144,7 +159,7 @@ returned without a live target permission check. Calls cannot replace the
 originating user or pass an arbitrary management method, executable, endpoint,
 or credential.
 
-| Tool | Target permission | Result |
+| Tool | Permission for Agents on other machines | Result |
 | --- | --- | --- |
 | `deskfleet_remote_machines` | Read, operate, session, or workspace | Other online machines in the same Team and their current permissions |
 | `deskfleet_remote_machine` | Read, session, or workspace | Catalog, Workspaces, directories, and public provider identities |
@@ -190,7 +205,7 @@ permission is enabled.
 Requests and results pass through the existing backend management transport and
 its transient cross-instance inbox, within that transport's size and time limits.
 The central backend therefore remains inside their trust boundary. The request
-retains the initiating user, source Machine and Session; the source Agent's MCP
+retains the initiating user, Session, and source Machine when applicable. The source Agent's MCP
 tool activity uses its existing conversation recording. Connection configuration
 and saved secrets are never included in server discovery responses.
 

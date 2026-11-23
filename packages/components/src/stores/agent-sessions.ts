@@ -1,23 +1,25 @@
 import { useConversationCache } from "../services/conversation-cache.ts"
 import { useAgentLiveState } from "../composables/useAgentLiveState.ts"
-import { isSubagentNotification } from "../../../client/src/agent-session-scope.ts"
-import type { AgentLiveUpdate } from "../../../client/src/agent-live.ts"
+import { isSubagentNotification } from "@deskfleet/protocol/agent-session-scope"
+import type { AgentLiveUpdate } from "@deskfleet/protocol/agent-live"
 import { snapshotIsWorking, type SessionActivity } from "../services/agent-conversation.ts"
+import { extractSessionPreview, latestSessionInput, snapshotLastMessageAt, type SessionMessagePreview } from "../services/session-preview.ts"
 import { usePlatformClient } from "../composables/usePlatformClient.ts"
 import { cloneFnJSON, useLocalStorage, useTimeoutFn } from "@vueuse/core"
 import { defineStore } from "pinia"
 import { markRaw, onScopeDispose, ref, toRaw, watch } from "vue"
-import type { AgentCommand, AgentElicitation, AgentEvent, AgentInput, AgentMethod, AgentMethods, AgentPermission, AgentPreview, AgentRun, AgentSessionContext, AgentSessionRecord, AgentSnapshot, AgentTurn } from "../../../../apps/daemon/src/agent-protocol.ts"
+import { AGENT_HISTORY_MAX_EVENTS } from "@deskfleet/protocol/agent"
+import type { AgentCommand, AgentElicitation, AgentEvent, AgentInput, AgentMethod, AgentMethods, AgentPermission, AgentPreview, AgentRun, AgentSessionContext, AgentSessionRecord, AgentSnapshot, AgentTurn } from "@deskfleet/protocol/agent"
 import { AgentPreviews } from "../services/agent-preview.ts"
 import type { ElicitationDraft } from "../services/agent-elicitation.ts"
 import type { ComposerAttachment } from "../services/composer-attachments.ts"
 import type { ComposerMention } from "../services/composer-mentions.ts"
-import type { ComposerReference, ComposerReferenceSearch } from "../../../../apps/daemon/src/composer-reference-protocol.ts"
-import { agentComposerCatalog, agentConfiguration as normalizeAgentConfiguration } from "../../../../apps/daemon/src/agent-configuration-protocol.ts"
-import { isSnapshotReference } from "../../../../apps/daemon/src/agent-command-results.ts"
-import type { AgentConfiguration } from "../../../client/src/agent-configuration.ts"
-import { RelayConnectionError, type RelayDeniedReason } from "../../../client/src/relay.ts"
-import type { GitChangedNotification, GitDiffRequest } from "../../../../apps/daemon/src/git-protocol.ts"
+import type { ComposerReference, ComposerReferenceSearch } from "@deskfleet/protocol/composer-reference"
+import { agentComposerCatalog, agentConfiguration as normalizeAgentConfiguration } from "@deskfleet/protocol/agent-configuration"
+import { isSnapshotReference } from "@deskfleet/protocol/agent-command-results"
+import type { AgentConfiguration, AgentQuotaItem } from "@deskfleet/client/agent-configuration"
+import { RelayConnectionError, type RelayDeniedReason } from "@deskfleet/client/relay"
+import type { GitChangedNotification, GitDiffRequest } from "@deskfleet/protocol/git"
 import { useProvidersStore } from "./providers.ts"
 import { AgentClient, type AgentConnectionState, type AgentNotification } from "../services/agent-client.ts"
 import { captureAnalyticsContext } from "../services/analytics.ts"
@@ -53,7 +55,19 @@ export interface SubmittedAgentDraft {
   attachmentIds: readonly string[]
 }
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error)
-const sequenceCompare = (left: string, right: string) => BigInt(left) < BigInt(right) ? -1 : BigInt(left) > BigInt(right) ? 1 : 0
+function sequenceCompare(left: string, right: string): number {
+  const difference = BigInt(left) - BigInt(right)
+  return difference < 0n ? -1 : difference > 0n ? 1 : 0
+}
+function contiguousThrough(after: string, committed: ReadonlyMap<string, AgentEvent>, staged?: ReadonlyMap<string, AgentEvent>): string {
+  let sequence = BigInt(after)
+  let next = (sequence + 1n).toString()
+  while (committed.has(next) || staged?.has(next)) {
+    sequence++
+    next = (sequence + 1n).toString()
+  }
+  return sequence.toString()
+}
 function replace<T>(values: T[], value: T, key: (value: T) => string | number): void {
   const index = values.findIndex(item => key(item) === key(value))
   if (index === -1) values.push(value)
@@ -103,6 +117,15 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   const configurationSequences = new Map<string, string>()
   // A provider switch invalidates reads and merges started for the previous Agent.
   const configurationEpochs = new Map<string, number>()
+  const USAGE_CACHE_TTL_MS = 60_000
+  const usageCache = new Map<string, { items: AgentQuotaItem[]; expiresAt: number }>()
+  const usageReads = new Map<string, Promise<AgentQuotaItem[]>>()
+  let usageGeneration = 0
+  function clearUsageCache(): void {
+    usageGeneration++
+    usageCache.clear()
+    usageReads.clear()
+  }
   const commandSequences = new Map<string, string>()
   const unclassifiedCommands = new Map<string, Parameters<typeof agentComposerCatalog>[0]>()
   const state = ref<AgentConnectionState>("idle")
@@ -122,6 +145,8 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   const deletedSessions = new Set<string>()
   const loads = new Map<string, Promise<void>>()
   const reads = new Map<string, Promise<void>>()
+  const previewCache = new Map<string, { seq: string; preview: SessionMessagePreview }>()
+  const previewLoads = new Map<string, Promise<SessionMessagePreview | null>>()
   const permissionRequests = new Map<string, { sessionId: string; permissionId: string; resolve(value: unknown): void }>()
   const gitSubscriptions = new Map<string, { sessionId: string; listener(error?: string): void }>()
   let connectionGeneration = 0
@@ -146,6 +171,9 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   }
   watch(() => providers.providers, () => {
     for (const [sessionId, commands] of unclassifiedCommands) projectCommands(sessionId, commands)
+  })
+  watch(() => providers.revision, (current, previous) => {
+    if (previous !== undefined && current !== previous) clearUsageCache()
   })
 
   function view(id: string): AgentSessionView {
@@ -226,13 +254,15 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     // Keep metadata separate from immutable journal payloads. Updating just the
     // cursor must not invalidate consumers of title, ownership or unread state.
     if (!current) { sessions.value[record.id] = { ...record }; return }
+    const lastMessageAt = record.lastMessageAt ?? current.lastMessageAt
     for (const key of Object.keys(current)) if (!(key in record)) Reflect.deleteProperty(current, key)
     Object.assign(current, record)
+    if (lastMessageAt !== undefined) current.lastMessageAt = lastMessageAt
   }
   function advance(id: string): void {
     const current = view(id)
     const events = journal(id)
-    while (events.has((BigInt(current.historySeq) + 1n).toString())) current.historySeq = (BigInt(current.historySeq) + 1n).toString()
+    current.historySeq = contiguousThrough(current.historySeq, events)
     if (!current.snapshot) return
     let next = events.get((BigInt(current.snapshotSeq) + 1n).toString())
     while (next) {
@@ -245,7 +275,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     resolvePermissions()
     resolveElicitations(current.snapshot)
   }
-  function remember(events: AgentEvent[]): void {
+  function remember(events: Iterable<AgentEvent>, history?: { id: string; complete: boolean }): void {
     const changed = new Map<string, AgentEvent[]>()
     for (const event of events) {
       if (deletedSessions.has(event.sessionId)) continue
@@ -255,6 +285,10 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       if (sequenceCompare(event.seq, journalTails.get(event.sessionId) ?? "0") > 0) journalTails.set(event.sessionId, event.seq)
       if (event.kind === "session" && sequenceCompare(event.seq, sessions.value[event.sessionId]?.lastEventSeq ?? "0") >= 0) updateSession(event.payload as AgentSessionRecord)
       if (event.kind === "input") delete optimisticInputs.value[event.sessionId]
+      const isMessage = event.kind === "input" && ["pending", "dispatching"].includes((event.payload as AgentInput).state)
+        || event.kind === "acp" && "update" in event.payload && !isSubagentNotification(event.payload) && event.payload.update.sessionUpdate === "agent_message_chunk"
+      const currentSession = isMessage ? sessions.value[event.sessionId] : undefined
+      if (currentSession && (!currentSession.lastMessageAt || event.createdAt > currentSession.lastMessageAt)) currentSession.lastMessageAt = event.createdAt
       if (event.kind === "command") commandReceived(event.payload as AgentCommand)
       if (event.kind === "run" && (event.payload as AgentRun).state === "starting"
         && sequenceCompare(event.seq, commandSequences.get(event.sessionId) ?? "0") > 0) {
@@ -281,7 +315,19 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       additions.push(event)
       changed.set(event.sessionId, additions)
     }
+    // A complete authoritative read also replaces an empty or duplicate-only cached display.
+    if (history?.complete && retainedDisplays.has(history.id) && !changed.has(history.id)) changed.set(history.id, [])
     for (const [id, additions] of changed) {
+      if (history?.id === id && (history.complete || !retainedDisplays.has(id))) {
+        retainedDisplays.delete(id)
+        advance(id)
+        const current = view(id)
+        previews.committed(id, current.historySeq)
+        visiblePreviews.delete(id)
+        const committed = [...journal(id).values()].sort((left, right) => sequenceCompare(left.seq, right.seq))
+        current.events = committed.concat(takePreview(id, committed.at(-1)?.seq ?? "0"))
+        continue
+      }
       const current = view(id)
       // A committed preview has exactly the same draft and sequence. Promote it
       // without replacing display history, even when a commit spans many frames.
@@ -309,16 +355,20 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       appendPreview(id)
     }
   }
-  function appendPreview(id: string): void {
-    if (deletedSessions.has(id)) return
-    const current = view(id)
-    const events = previews.after(id, current.events.at(-1)?.seq ?? "0")
+  function takePreview(id: string, after: string): AgentEvent[] {
+    const events = previews.after(id, after)
     if (events.length) {
       let visible = visiblePreviews.get(id)
       if (!visible) { visible = new Set(); visiblePreviews.set(id, visible) }
       for (const event of events) visible.add(event.seq)
-      current.events.push(...events.map(event => markRaw(event)))
     }
+    return events.map(event => markRaw(event))
+  }
+  function appendPreview(id: string): void {
+    if (deletedSessions.has(id)) return
+    const current = view(id)
+    const events = takePreview(id, current.events.at(-1)?.seq ?? "0")
+    if (events.length) current.events.push(...events)
   }
   function flushDisplay(recoverHistory = true): void {
     displayTimer.stop()
@@ -348,7 +398,10 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     if (snapshot.inputs.length) delete optimisticInputs.value[snapshot.session.id]
     current.snapshot = snapshot
     current.snapshotSeq = snapshot.session.lastEventSeq
-    if (sequenceCompare(snapshot.session.lastEventSeq, sessions.value[snapshot.session.id]?.lastEventSeq ?? "0") >= 0) updateSession(snapshot.session)
+    const lastMessageAt = snapshotLastMessageAt(snapshot)
+    const session = lastMessageAt && lastMessageAt !== snapshot.session.lastMessageAt
+      ? { ...snapshot.session, lastMessageAt } : snapshot.session
+    if (sequenceCompare(snapshot.session.lastEventSeq, sessions.value[snapshot.session.id]?.lastEventSeq ?? "0") >= 0) updateSession(session)
     advance(snapshot.session.id)
   }
 
@@ -362,6 +415,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       clearPreviews()
       initialized = null
       connectionGeneration++
+      clearUsageCache()
       gitSubscriptions.clear()
       sessionPresence.value = {}
       live.clear()
@@ -418,7 +472,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     initialized ??= (async () => {
       await client.connect()
       await client.call("initialize", {
-        protocolVersion: 1, clientInfo: { name: "deskfleet", title: "DeskFleet", version: "0.19.0" }, clientCapabilities: {},
+        protocolVersion: 1, clientInfo: { name: "deskfleet", title: "DeskFleet", version: "0.22.0" }, clientCapabilities: {},
       })
     })().catch(reason => { initialized = null; throw reason })
     return initialized
@@ -509,27 +563,58 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   function readHistory(id: string): Promise<void> {
     const existing = reads.get(id)
     if (existing) return existing
+    const current = view(id)
+    // Keep pages out of the reactive transcript until the read catches up.
+    const staged = new Map<string, AgentEvent>()
     const reading = (async () => {
+      let afterSeq = current.historySeq
+      let stagedTail = afterSeq
       for (;;) {
-        const afterSeq = view(id).historySeq
-        const events = await call("_deskfleet/session/history", { sessionId: id, afterSeq, limit: 100 })
-        if (disposed || deletedSessions.has(id)) return
-        remember(events)
-        const current = view(id)
-        const latest = journalTails.get(id) ?? "0"
-        const target = sequenceCompare(latest, current.snapshotSeq) > 0 ? latest : current.snapshotSeq
-        if (sequenceCompare(current.historySeq, target) >= 0) { current.error = null; current.relayDeniedReason = undefined; return }
-        if (events.length === 0 || current.historySeq === afterSeq) throw new Error("Conversation history is incomplete; reconnect to load missing events")
+        const page = await call("_deskfleet/session/history", { sessionId: id, afterSeq, limit: AGENT_HISTORY_MAX_EVENTS })
+        if (disposed || views.value[id] !== current) return
+        for (const event of page) staged.set(event.seq, event)
+        const last = page.at(-1)?.seq ?? afterSeq
+        if (sequenceCompare(last, stagedTail) > 0) stagedTail = last
+        // Live commits can fill a gap while a history page is in flight.
+        const through = contiguousThrough(afterSeq, journal(id), staged)
+        if ([stagedTail, current.snapshotSeq, journalTails.get(id) ?? "0"].every(target => sequenceCompare(through, target) >= 0)) break
+        if (page.length === 0 || through === afterSeq) throw new Error("Conversation history is incomplete; reconnect to load missing events")
+        afterSeq = through
       }
+      remember(staged.values(), { id, complete: true })
+      current.error = null
+      current.relayDeniedReason = undefined
     })().catch(reason => {
-      if (!deletedSessions.has(id)) {
-        view(id).error = messageOf(reason)
-        view(id).relayDeniedReason = reason instanceof RelayConnectionError ? reason.relayDeniedReason : undefined
+      if (!disposed && views.value[id] === current) {
+        remember(staged.values(), { id, complete: false })
+        current.error = messageOf(reason)
+        current.relayDeniedReason = reason instanceof RelayConnectionError ? reason.relayDeniedReason : undefined
       }
       throw reason
     }).finally(() => { reads.delete(id) })
     reads.set(id, reading)
     return reading
+  }
+  async function readPreview(id: string): Promise<SessionMessagePreview | null> {
+    if (deletedSessions.has(id)) return null
+    const loaded = views.value[id]
+    if (loaded?.snapshot && (loaded.events.length > 0 || loaded.snapshot.inputs.length === 0)) return extractSessionPreview(loaded.snapshot, loaded.events)
+    const seq = sessions.value[id]?.lastEventSeq
+    const cached = previewCache.get(id)
+    if (cached && (!seq || cached.seq === seq)) return cached.preview
+    const task = previewLoads.get(id) ?? (async () => {
+      const snapshot = api.history ? await api.history.snapshot(id) : await call("_deskfleet/session/subscribe", { sessionId: id })
+      const input = !disposed && !deletedSessions.has(id) ? latestSessionInput(snapshot.inputs) : undefined
+      const tail = input && sequenceCompare(snapshot.session.lastEventSeq, input.acceptedSeq) > 0
+        ? await (api.history ? api.history.events(id, input.acceptedSeq, 200) : call("_deskfleet/session/history", { sessionId: id, afterSeq: input.acceptedSeq, limit: 200 }))
+        : []
+      if (disposed || deletedSessions.has(id)) return null
+      const preview = extractSessionPreview(snapshot, tail)
+      previewCache.set(id, { seq: snapshot.session.lastEventSeq, preview })
+      return preview
+    })().finally(() => { previewLoads.delete(id) })
+    previewLoads.set(id, task)
+    return task
   }
   function open(id: string, showLoading = true): Promise<void> {
     if (deletedSessions.has(id)) return Promise.resolve()
@@ -558,28 +643,31 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       const snapshot = await history.snapshot(id)
       const events: AgentEvent[] = []
       let after = "0"
-      while (!disposed && !deletedSessions.has(id) && !liveSnapshot) {
-        const page = await history.events(id, after, 100)
-        if (disposed || deletedSessions.has(id) || liveSnapshot) return
-        events.push(...page)
-        if (journal(id).size === 0 && !cachedShown) {
-          current.snapshot = snapshot
-          current.events = [...events]
-          retainedDisplays.add(id)
-          current.loading = false
-        }
+      while (!disposed && views.value[id] === current && !liveSnapshot && !cachedShown) {
+        const page = await history.events(id, after, AGENT_HISTORY_MAX_EVENTS).catch(reason => {
+          if (events.length === 0) throw reason
+          return []
+        })
+        if (disposed || views.value[id] !== current || liveSnapshot || cachedShown) return
+        for (const event of page) events.push(markRaw(event))
         const next = page.at(-1)?.seq
-        if (!next || sequenceCompare(next, after) <= 0 || sequenceCompare(next, snapshot.session.lastEventSeq) >= 0) return
+        if (!next || sequenceCompare(next, after) <= 0 || sequenceCompare(next, snapshot.session.lastEventSeq) >= 0) break
         after = next
       }
+      if (disposed || views.value[id] !== current || liveSnapshot || cachedShown || journal(id).size > 0) return
+      current.snapshot = snapshot
+      current.events = events
+      retainedDisplays.add(id)
+      current.loading = false
     })().catch(() => {}) : undefined
     const loading = (async () => {
       const snapshot = await call("_deskfleet/session/subscribe", { sessionId: id })
-      if (disposed || deletedSessions.has(id)) return
+      if (disposed || views.value[id] !== current) return
       liveSnapshot = true
       snapshotReceived(snapshot)
       await readHistory(id)
-      if (retainedDisplays.delete(id)) current.events = [...journal(id).values()].sort((a, b) => sequenceCompare(a.seq, b.seq))
+      if (disposed || views.value[id] !== current) return
+      current.loading = false
       if (cache) { cacheDirty.add(id); if (!cacheTimer.isPending.value) cacheTimer.start() }
       await reconcileOperations(id)
     })().catch(async reason => {
@@ -699,7 +787,31 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   async function releaseAgentConfiguration(params: { provider: string; workspaceId?: string; probeId: string }): Promise<void> {
     await call("_deskfleet/agent/configuration", { ...params, release: true })
   }
-  const agentUsage = (provider: string) => call("_deskfleet/agent/usage", { provider })
+  function cachedAgentUsage(provider: string): AgentQuotaItem[] | null {
+    const cached = usageCache.get(provider)
+    return cached && cached.expiresAt > Date.now() ? cached.items : null
+  }
+  function agentUsage(provider: string, options?: { force?: boolean }): Promise<AgentQuotaItem[]> {
+    if (!options?.force) {
+      const cached = cachedAgentUsage(provider)
+      if (cached !== null) return Promise.resolve(cached)
+      const inflight = usageReads.get(provider)
+      if (inflight) return inflight
+    }
+    const generation = usageGeneration
+    const reading = call("_deskfleet/agent/usage", { provider })
+      .then(items => {
+        if (generation === usageGeneration) {
+          usageCache.set(provider, { items, expiresAt: Date.now() + USAGE_CACHE_TTL_MS })
+        }
+        return items
+      })
+      .finally(() => {
+        if (usageReads.get(provider) === reading) usageReads.delete(provider)
+      })
+    usageReads.set(provider, reading)
+    return reading
+  }
   function configurationEpoch(sessionId: string): number {
     return configurationEpochs.get(sessionId) ?? 0
   }
@@ -772,7 +884,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
       throw reason
     }
   }
-  async function create(workspaceId: string | undefined, title: string, context: AgentSessionContext, provider: string, baseBranch?: string, baseRevisions?: AgentMethods["_deskfleet/session/create"]["params"]["baseRevisions"], enableYolo = draftYolo.value, options?: { deferStartup?: boolean; cwd?: string }): Promise<AgentSnapshot> {
+  async function create(workspaceId: string | undefined, title: string, context: AgentSessionContext, provider: string, baseBranch?: string, baseRevisions?: AgentMethods["_deskfleet/session/create"]["params"]["baseRevisions"], enableYolo = draftYolo.value, options?: { deferStartup?: boolean; cwd?: string; superAgent?: boolean }): Promise<AgentSnapshot> {
     const track = captureAnalyticsContext()
     const pending = Object.values(operations.value).find(operation => operation.method === "_deskfleet/session/create" && operation.workspaceId === workspaceId)
     const choices = draftConfiguration.value.provider === provider ? draftConfiguration.value : undefined
@@ -780,7 +892,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     const branch = !revisions && workspaceId && context === "worktree" && baseBranch?.trim() ? baseBranch.trim() : undefined
     const cwd = context === "directory" && options?.cwd?.trim() ? options.cwd.trim() : undefined
     const params: Omit<AgentMethods["_deskfleet/session/create"]["params"], "operationId"> = {
-      ...(workspaceId ? { workspaceId } : {}), title, provider, context, ...(cwd ? { cwd } : {}), ...(branch ? { baseBranch: branch } : {}), ...(revisions ? { baseRevisions: revisions } : {}), ...(options?.deferStartup ? { deferStartup: true } : {}), ...(enableYolo ? { yolo: true } : {}), model: choices?.model, reasoningEffort: choices?.reasoningEffort, mode: choices?.mode, configValues: choices?.configValues,
+      ...(workspaceId ? { workspaceId } : {}), title, provider, context, ...(cwd ? { cwd } : {}), ...(branch ? { baseBranch: branch } : {}), ...(revisions ? { baseRevisions: revisions } : {}), ...(options?.deferStartup ? { deferStartup: true } : {}), ...(enableYolo ? { yolo: true } : {}), ...(options?.superAgent ? { superAgent: true } : {}), model: choices?.model, reasoningEffort: choices?.reasoningEffort, mode: choices?.mode, configValues: choices?.configValues,
     }
     const snapshot = await capacityAction("create", { context, scope: workspaceId ? "workspace" : "machine" }, async () => {
       if (pending) {
@@ -936,6 +1048,7 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
     previews.delete(sessionId)
     live.remove(sessionId)
     visiblePreviews.delete(sessionId)
+    previewCache.delete(sessionId)
   }
   const gitBranches = (workspaceId: string) => call("_deskfleet/git/branches", { workspaceId })
   const prepareGit = (workspaceId: string, context: AgentSessionContext, confirmationToken?: string) => call("_deskfleet/git/prepare", { workspaceId, context, ...(confirmationToken ? { confirmationToken } : {}) })
@@ -966,5 +1079,5 @@ export const useAgentSessionsStore = defineStore("agent-sessions", () => {
   }
   const closeTransport = () => { flushDisplay(false); clearPreviews(); client.close() }
   onScopeDispose(() => { cacheTimer.stop(); persistConversations(); disposed = true; displayTimer.stop(); pendingEvents = []; pendingPreviews.clear(); gitSubscriptions.clear(); closeTransport() })
-  return { notices: live.notices, authStatuses: live.authStatuses, dismissNotice: live.dismiss, sessions, views, isWorking, drafts, draftAttachments, draftMentions, draftErrors, preparingDrafts, optimisticInputs, elicitationDrafts, draftConfiguration, draftYolo, configurations, agentConfiguration, releaseAgentConfiguration, agentUsage, sessionConfiguration, configureSession, switchAgent, state, error, relayDeniedReason, operations, sessionPresence, refresh, open, attend, leave, markRead, markUnread, checkOperation, create, fork, submit, steer, withdraw, retry, cancel, respond, respondToElicitation, stop, rename, setYolo, archive, restore, remove, composerReferences, resolveComposerReferences, gitBranches, prepareGit, gitStatus, gitDiff, watchGit, closeTransport }
+  return { notices: live.notices, authStatuses: live.authStatuses, dismissNotice: live.dismiss, sessions, views, isWorking, drafts, draftAttachments, draftMentions, draftErrors, preparingDrafts, optimisticInputs, elicitationDrafts, draftConfiguration, draftYolo, configurations, agentConfiguration, releaseAgentConfiguration, agentUsage, cachedAgentUsage, sessionConfiguration, configureSession, switchAgent, state, error, relayDeniedReason, operations, sessionPresence, refresh, open, readPreview, attend, leave, markRead, markUnread, checkOperation, create, fork, submit, steer, withdraw, retry, cancel, respond, respondToElicitation, stop, rename, setYolo, archive, restore, remove, composerReferences, resolveComposerReferences, gitBranches, prepareGit, gitStatus, gitDiff, watchGit, closeTransport }
 })

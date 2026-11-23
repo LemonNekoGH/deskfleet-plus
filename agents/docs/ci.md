@@ -21,16 +21,17 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
   the required status check in repository branch protection. Successful push and
   manual runs on `main` then deploy the product website to GitHub Pages, except
   `specs_only` pushes, which produce no website artifact.
-  A new pull request push cancels that pull request's previous run; runs on
-  `main` and the daily run are never cancelled, so every main commit finishes
-  and saves its caches. The reusable workflows declare no concurrency groups of
-  their own. After each run on `main`, `Prune caches` deletes superseded cache
-  entries, as described under [Toolchains and caches](#toolchains-and-caches).
+  A new pull request push cancels that pull request's previous run. The
+  concurrency policy lets started push, scheduled, and manual runs finish,
+  while GitHub can replace older queued runs in the same group. Reusable
+  workflows inherit the caller's group. After each run on `main`, `Prune
+  caches` removes retired and superseded entries as described under
+  [Toolchains and caches](#toolchains-and-caches).
 - `.github/workflows/test.yml` runs a staged test pipeline. `Preflight` runs
   the checks that need no Rust compilation on Linux with `mise run ci:preflight`:
   rustfmt, cargo-shear, script tests, the Rust skills harness check, the pnpm
-  patch/Renovate contract check, the Quint simulator (`spec:test`), and the Web
-  and website type checks. Platform
+  patch/Renovate contract check, the workspace package boundary check, the Quint
+  simulator (`spec:test`), and the Web and website type checks. Platform
   tests and backend integration jobs wait for it (`needs: preflight`), providing
   fast-fail feedback before running on expensive runners. `Static checks` runs
   beside them with `mise run ci:check:static`: Clippy, the type checks that need
@@ -47,7 +48,9 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
   tests run in parallel. Linux uses `mise run test`, including the renderer Vitest
   project. macOS and Windows use `mise run ci:test:platform`: the same Rust, daemon,
   script, and desktop main/shared/client checks, without repeating the happy-dom renderer
-  project. Each platform also runs `mise run desktop:smoke-dsh` against Electron's Node
+  project. Windows tests have a 45-minute job deadline to accommodate cold Rust
+  builds and cache upload. Linux and macOS tests have a 30-minute deadline.
+  Each platform also runs `mise run desktop:smoke-dsh` against Electron's Node
   host, plus `mise run desktop:smoke-proxy` to verify backend sign-in, bearer HTTP,
   and WebSocket events through an isolated session proxy with direct access refused
   (under Xvfb on Linux). Local `mise run test` still runs both Vitest projects on every OS. It supports
@@ -71,7 +74,7 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
   only Electron a fixed API origin.
   Its shared Rust task runs one napi-driven Cargo workspace build for the server,
   native addon, desktop viewer, and Windows service, using the host target.
-  SEA and Electron bundling consume that addon without compiling it again.
+  Bun and Electron bundling consume that addon without compiling it again.
   CI packaging sets `DESKFLEET_NATIVE_PREBUILT=1` so staging copies the viewer
   and service from that same workspace build instead of invoking Cargo again.
   A missing executable fails packaging. Local packaging builds these executables
@@ -92,21 +95,21 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
   passes `/DEBUG:NONE` to the MSVC linker through target-specific Rust flags,
   overriding rustc's `/DEBUG` default so vendored OpenSSL does not require a PDB
   during release linking. Each target packages and verifies the
-  standalone SEA daemon.
+  standalone Bun daemon.
   Build runs on `ubuntu-24.04` and `ubuntu-24.04-arm`, while every other Linux
   job uses the newest hosted image, `ubuntu-26.04` or `ubuntu-26.04-arm`. The
   build image sets the glibc floor of the released binaries, and
   `scripts/check-linux-release.ts` installs the packages on Ubuntu 24.04.
   `ubuntu-latest` lags new images, so workflows name the version.
   The same matrix packages Electron installers and Linux desktop archives and
-  smoke-tests the bundled server container on each native Linux runner. The
+  smoke-tests the server and Super Agent containers on each native Linux runner. The
   Publish caller enables production configuration and macOS signing. PR, main,
   and manual Build runs do not bind
   the production environment: Statsig and Sentry stay disabled, and Electron
   defaults to `http://localhost:8080`. It supports reusable calls and manual runs.
 - `.github/workflows/publish.yml` validates `v*` tags, calls Test and Build, then
   calls Nix, AUR, and Linux package validation with the desktop artifacts from
-  Build. It creates a draft GitHub Release and pushes the server image after all
+  Build. It creates a draft GitHub Release and publishes both service images after all
   five workflows succeed.
 - `.github/workflows/nix.yml` consumes the same-run Linux desktop archives and
   macOS app ZIP from Build, generates a flake bundle, checks the repackaged Linux
@@ -126,7 +129,7 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
 - `.github/workflows/aur.yml` generates the Arch package from the same-run Linux
   x86_64 desktop archive and builds, installs, smoke-tests, and removes it inside
   a disposable Arch container. Publish requires it before creating the draft or
-  pushing the server image. It needs no AUR credentials and is excluded from daily
+  publishing the service images. It needs no AUR credentials and is excluded from daily
   CI.
 - `.github/workflows/linux-packages.yml` repackages the same-run Linux desktop
   archives into Debian `.deb` and RPM packages for the native architecture. It
@@ -142,10 +145,12 @@ DEB/RPM validation also runs after packaging builds in `ci.yml`.
   workspace and configures shared caches for the Test and Build workflows. It
   writes a cache restore summary for each job.
 
-The build matrix covers Linux x64/arm64, macOS arm64, and Windows x64. Each
-server/daemon archive, such as `deskfleet-linux-x64.tar.gz`, contains
-`deskfleet-server` and `deskfleet-daemon` (`.exe` on Windows).
-Separate desktop artifacts contain macOS arm64 DMG/ZIP, Windows x64 NSIS, and
+The build matrix covers Linux x64/arm64, macOS arm64/x64, and Windows x64. The
+Intel macOS job uses the native `macos-26-intel` runner and the same build and
+packaging steps as Apple Silicon. Each server/daemon archive, such as
+`deskfleet-macos-x64.tar.gz`, contains `deskfleet-server` and `deskfleet-daemon`
+(`.exe` on Windows).
+Separate desktop artifacts contain macOS arm64/x64 DMG/ZIP, Windows x64 NSIS, and
 Linux x64/arm64 AppImages and desktop archives, plus updater YAML and blockmaps.
 The Linux desktop archive names include the app version, such as
 `deskfleet-<version>-linux-x64.tar.gz`. PRs and main pushes exercise packaging on
@@ -157,22 +162,20 @@ as described in the Web guide. Publish includes this same-run Web artifact in
 both server image architectures. The artifact remains available for independent
 static hosting for 14 days; it is not added to the GitHub Release archives.
 
-The standalone archive includes `dsh/` beside the daemon executable, containing
-the pinned DeepSeek Harness package tree, private Node executable, and licenses.
-The build task prepares this payload separately from SEA bundling through
-`dsh:stage`. Desktop builds prepare the package tree in `out/dsh` and smoke-test
-it with Electron before Vite runs; packaging places that tree in resources
-without a private Node executable. Desktop launches dsh using Electron's Node
-mode. `packages/dsh-runtime` owns both deployment paths and smoke checks.
+Headless agents use the DeepSeek Harness CLI installed on the executing machine.
+Desktop builds prepare the pinned package tree in `out/dsh` and smoke-test it
+with Electron before Vite runs. Packaging places that tree in resources, and
+Desktop launches dsh using Electron's Node mode. `packages/dsh-runtime` owns
+this deployment and its smoke checks.
 Staging uses an offline production deploy from the workspace lockfile and
 preserves upstream plugins, native modules, and subprocess helpers.
 After desktop packaging, `desktop:smoke-packaged-dsh` runs the installed
 executable against its resources with the configured Electron fuses. This
 also checks that the package tree was copied and no private Node was included.
 
-Smoke tests copy the daemon executable and `dsh/` to an unrelated temporary directory,
-clear Node's environment overrides and PATH, then check native information,
-the bundled ACP adapter, the DeepSeek ACP handshake, startup, and the health
+Smoke tests copy the daemon executable to an unrelated temporary directory,
+clear Node's environment overrides and PATH, then check the embedded Bun version, native information,
+the bundled ACP adapters, startup, and the health
 endpoint. Unix tests also require clean signal-driven shutdown; Windows tests terminate the process forcibly.
 
 ## Product website deployment
@@ -230,6 +233,8 @@ Configure these environment variables:
 | `SENTRY_URL` | Optional self-hosted Sentry URL; defaults to `https://sentry.io/`. |
 | `IOS_APP_PROFILE_NAME` | Exact name of the existing App Store Connect provisioning profile for `ai.yetanother.deskfleet`. |
 | `IOS_BROADCAST_PROFILE_NAME` | Exact name of the existing App Store Connect provisioning profile for `ai.yetanother.deskfleet.BroadcastUpload`. |
+| `DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS` | Optional comma-separated `<keyId>:<base64>` Ed25519 public keys compiled into `deskfleet-maintenance-service.exe` for verifying silent Windows desktop service updates. Generate with `node scripts/windows-service-signing.ts keygen`. |
+| `WINDOWS_SERVICE_SIGNING_KEY_ID` | Optional key ID matching `WINDOWS_SERVICE_SIGNING_KEY` (defaults to `v1`). |
 
 The reusable Build workflow binds its packaging job to `production` only when
 Publish requests a production release. The caller passes the signing secret
@@ -270,6 +275,7 @@ Configure these secrets in the same environment:
 | `ANDROID_GOOGLE_SERVICES_JSON` | Optional `google-services.json` (plain JSON or base64) staged into `apps/web/android/app/google-services.json` during production Android builds and removed afterward. |
 | `IOS_GOOGLE_SERVICE_INFO_PLIST` | Optional `GoogleService-Info.plist` (plain XML or base64) staged into `apps/web/ios/App/App/GoogleService-Info.plist` during signed iOS builds and removed afterward. |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Google Play Developer API service account JSON credentials for publishing to the `internal` track. |
+| `WINDOWS_SERVICE_SIGNING_KEY` | Optional base64-encoded PKCS#8 Ed25519 private key used during Windows packaging to sign `deskfleet-desktop-service.manifest.json` for silent `DeskFleetMaintenance` updates. |
 
 The release overlay requires signing and notarization; missing credentials or a
 failure prevents publication. PR, main, and ordinary manual Build runs package
@@ -302,7 +308,7 @@ renderer can initiate a direct peer connection.
 Each tag produces a **draft** GitHub Release containing the desktop installers,
 two Linux desktop archives, four Linux distribution packages (`.deb` for amd64
 and arm64, `.rpm` for x86_64 and aarch64), the `deskfleet-nix.tar.gz` flake
-bundle, four server/daemon archives, updater metadata and blockmaps, and the
+bundle, five server/daemon archives, updater metadata and blockmaps, and the
 Android arm64 APK (`deskfleet-<version>-android-arm64.apk`). Review its
 generated notes and assets, then publish it in GitHub. Prerelease tags create
 prerelease drafts.
@@ -320,18 +326,19 @@ architecture. Publishing a stable release makes it discoverable without another
 Pages build. Drafts and prereleases do not replace the website's stable downloads;
 failed requests and unavailable assets retain a link to GitHub Releases.
 
-The installation section groups methods by platform: Homebrew and DMG on macOS;
-the Windows installer; and AppImage, DEB, RPM, AUR, Linux Nix, and desktop
-archives on Linux. The macOS ZIP is reserved for the updater and Nix, and is not
-offered as a website installation method; macOS Nix users follow the nix-darwin
-instructions in the guide. DEB, RPM, Linux Nix, and Linux desktop archives
-appear only when the published release contains their assets. The Nix command
-uses that release's versioned flake URL. Homebrew uses the official tap. AUR
-links to the `deskfleet-bin` package page and remains available independently of
+The installation section offers DMGs for Apple Silicon and Intel, Homebrew for
+both macOS architectures, the Windows installer, and AppImage, DEB, RPM, AUR,
+Linux Nix, and desktop archives on Linux. The macOS updater uses the ZIP for its
+architecture. nix-darwin installations use the matching arm64 or x64 ZIP and
+follow the instructions in the guide. DEB, RPM, Linux Nix, and Linux desktop
+archives appear only when the published release contains their assets. The Nix command
+uses that release's versioned flake URL. Homebrew uses the official tap for the
+desktop cask and, once the companion tap packaging lands, the daemon formula.
+AUR links to the `deskfleet-bin` package page and remains available independently of
 GitHub release assets. Neither Homebrew nor AUR displays GitHub's release
-version as its own. Headless downloads remain separate server/daemon archives.
-English, Chinese, and Japanese pages share the same selection logic and
-localized instructions.
+version as its own. Headless downloads remain separate server/daemon archives
+(`deskfleet-macos-{arm64,x64}.tar.gz` on macOS). English, Chinese, and Japanese
+pages share the same selection logic and localized instructions.
 
 ### iOS distribution signing and TestFlight
 
@@ -391,6 +398,12 @@ the upload state before reporting failure. The job succeeds only after Apple
 finishes processing; a processing timeout can be retried without rebuilding.
 This publishes to TestFlight and does not submit the app for App Review.
 
+The main app's `apps/web/ios/App/App/Info.plist` sets
+`ITSAppUsesNonExemptEncryption` to Boolean `false`, declaring that the app uses
+no non-exempt encryption. Xcode includes this declaration in the IPA, so new
+TestFlight and App Store uploads do not require the repeated export compliance
+questionnaire. See [Apple's encryption declaration key](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption).
+
 Before the next release tag, run **Build → Run workflow → signed_ios = true** on
 a branch allowed by the production environment's deployment rules. This skips
 desktop and Android jobs, uses the same signing path, and produces the IPA and
@@ -411,8 +424,10 @@ when rotating the key.
 
 Electron uses `electron-updater` with the public GitHub provider for
 `yet-another-ai/deskfleet`. Packaging generates `latest.yml`, `latest-mac.yml`,
-`latest-linux.yml` and `latest-linux-arm64.yml`; the release job requires all four,
-the macOS update ZIP and the Windows/ZIP blockmaps before creating its draft.
+`latest-linux.yml` and `latest-linux-arm64.yml`. The release job combines the
+two macOS manifests into one `latest-mac.yml` so the updater can select the ZIP
+for its architecture. The draft requires all four manifests, both macOS ZIPs
+and their blockmaps, and the Windows blockmap.
 Each release carries its own metadata, including prereleases. GitHub's release
 status controls discovery, so a draft cannot trigger an update and stable clients
 do not receive prereleases. Publish complete releases with a higher version;
@@ -421,12 +436,18 @@ never replace assets on an existing published release.
 The Electron main process checks for updates on startup and every 30 minutes.
 Settings → Updates shows the installed version and can trigger a check on demand.
 **Settings → Preferences → Automatically download updates** is enabled by default
-and saved in `updates.json` under Electron's `userData` directory. When enabled,
-discovered updates download in the background and stop at the confirmation state;
-clicking **Update and restart** stops the embedded daemon, then installs and
-restarts the app. When disabled, clicking **Update and restart** downloads the
-update first before installing and restarting. Ordinary app exit does not install
-an update.
+and saved in `updates.json` under Electron's `userData` directory. On desktop,
+**Install updates on quit** is also enabled by default under that preference.
+When both are enabled, discovered updates download in the background and install
+silently without relaunching when the user quits from the tray. If a download is
+still in progress when the user quits from the tray, the window and tray close,
+hosted services stop, and the main process waits for the download to finish
+before installing. OS shutdown, signals, and in-app restarts skip quit
+installation. Clicking **Update and restart** stops the embedded daemon, then
+installs and restarts the app immediately. When automatic download is disabled,
+clicking **Update and restart** downloads the update first before installing and
+restarting. When **Install updates on quit** is disabled, ordinary app exit does
+not install an update.
 Windows uses NSIS, macOS uses the signed update ZIP, and Linux requires running
 the AppImage. Windows updates use the published blockmap for differential
 downloads; electron-updater falls back to a full installer when a differential
@@ -447,29 +468,39 @@ or either Linux architecture.
 
 ### Homebrew distribution
 
-The macOS Apple Silicon Cask is maintained in
+macOS desktop and daemon packaging is maintained in
 [`yet-another-ai/homebrew-tap`](https://github.com/yet-another-ai/homebrew-tap).
 DeskFleet owns application versions, signing, and release assets; the tap owns
-the Cask, release metadata validation, synchronization, and utility checks.
-The Cask installs the same signed and notarized DMG as the release page and
-retains the app's built-in updater. Install with:
+the Cask, daemon formula, release metadata validation, synchronization, and
+utility checks. The Cask installs the signed and notarized Apple Silicon or
+Intel DMG matching the host and retains the app's built-in updater. The formula
+installs only `deskfleet-daemon` from `deskfleet-macos-{arm64,x64}.tar.gz` and
+exposes `brew services`. Install with:
 
 ```sh
 brew install --cask yet-another-ai/tap/deskfleet
+brew install yet-another-ai/tap/deskfleet-daemon
 ```
 
-Cask synchronization lives only in the tap. It runs on a schedule and by manual
-dispatch there; DeskFleet does not notify the tap and does not need a
-`TAP_SYNC_TOKEN` or any other cross-repository secret for Homebrew. The tap
-reads GitHub's latest stable Release, validates the DMG metadata, and updates
-its synchronization PR. Homebrew verifies the installer's SHA-256 during
-installation. Drafts, prereleases, and unreleased version changes do not
-advance the Cask. Preserve published assets: the tap rejects same-version
-digest changes and automatic downgrades.
+Intel desktop cask support and the daemon formula require the companion tap
+packaging in
+[`yet-another-ai/homebrew-tap#8`](https://github.com/yet-another-ai/homebrew-tap/pull/8).
+Merge that tap PR before relying on those install paths. The published tap
+already serves the Apple Silicon desktop cask.
 
-Configure the tap's required check and auto-merge before relying on automatic
-updates. The initial Cask can use an existing stable Release. Tap setup and
-maintenance are documented in its
+Packaging synchronization lives only in the tap. It runs on a schedule and by
+manual dispatch there; DeskFleet does not notify the tap and does not need a
+`TAP_SYNC_TOKEN` or any other cross-repository secret for Homebrew. The tap
+reads GitHub's latest stable Release, validates both macOS DMGs and both macOS
+daemon archives, and updates its synchronization PR. Homebrew verifies each
+installer's SHA-256 during installation. Drafts, prereleases, and unreleased
+version changes do not advance packaging. Preserve published assets: the tap
+rejects same-version digest changes and automatic downgrades. Every stable
+release must continue publishing all four macOS artifacts the tap sync requires:
+`deskfleet-<ver>-mac-{arm64,x64}.dmg` and `deskfleet-macos-{arm64,x64}.tar.gz`.
+
+Configure the tap's required check before relying on scheduled updates. Tap
+setup and maintenance are documented in its
 [maintenance guide](https://github.com/yet-another-ai/homebrew-tap/blob/main/agents/docs/maintenance.md).
 
 If tap synchronization or PR checks fail, repair the reported problem and
@@ -481,8 +512,8 @@ gh workflow run sync-deskfleet.yml --repo yet-another-ai/homebrew-tap --ref main
 
 Manual dispatch reconciles the latest stable Release without a tag input. A
 delayed or failed sync leaves the published Release and desktop updater
-available; the tap retains its previous Cask until synchronization and merge
-succeed.
+available; the tap retains its previous packaging until synchronization and
+merge succeed.
 
 ### AUR distribution
 
@@ -564,20 +595,22 @@ users that require signatures must sign or verify them independently.
 ### Nix distribution
 
 Nix installs the prebuilt Linux desktop archive for `x86_64-linux` or
-`aarch64-linux`. On Apple Silicon, the same release flake exposes the signed
-macOS app bundle for nix-darwin. For tagged releases, Build compiles the desktop
-app once per architecture under the existing `production` environment and
-packages Linux as an AppImage and a `tar.gz`, and macOS as a signed ZIP. The
-archives already contain the official API, Statsig, and Sentry configuration.
-Changes to those variables take effect in the next release. The same Linux
-archive supplies the DEB, RPM, AUR, and Linux Nix packages.
+`aarch64-linux`. On macOS, the same release flake exposes the signed Apple
+Silicon and Intel app bundles for nix-darwin. For tagged releases, Build compiles
+the desktop app once per architecture under the existing `production`
+environment and packages Linux as an AppImage and a `tar.gz`, and macOS as a
+signed ZIP. The archives already contain the official API, Statsig, and Sentry
+configuration. Changes to those variables take effect in the next release. The
+same Linux archive supplies the DEB, RPM, AUR, and Linux Nix packages.
 
 Every release automatically generates `deskfleet-nix.tar.gz` from the templates
 under `nix/`. This bundle contains a flake with a locked nixpkgs input and the
 versioned GitHub Release URLs and SHA-256 hashes of both Linux desktop archives
-and the macOS app ZIP. The repository's `nix/flake.nix` is a release template;
-install from a generated release bundle. For a release containing that asset,
-replace `<VERSION>` with its version without the `v` prefix:
+and both macOS app ZIPs (`mac-arm64` and `mac-x64`). Hashes are computed from the
+published archives at packaging time; do not invent them. The repository's
+`nix/flake.nix` is a release template; install from a generated release bundle.
+For a release containing that asset, replace `<VERSION>` with its version without
+the `v` prefix:
 
 ```sh
 nix profile add 'https://github.com/yet-another-ai/deskfleet/releases/download/v<VERSION>/deskfleet-nix.tar.gz'
@@ -627,8 +660,8 @@ On the disposable Ubuntu runner, the workflow allows Chromium's user namespace
 sandbox through AppArmor and runs the installed package with sandboxing enabled.
 
 `Gate` includes the DEB/RPM workflow after packaging builds. Publish also requires
-Nix and AUR validation before creating the draft release or publishing the server
-image. Nix reuses the configuration already compiled by Build, so it needs no
+Nix and AUR validation before creating the draft release or publishing the service
+images. Nix reuses the configuration already compiled by Build, so it needs no
 production environment access, configuration snapshot, synchronization workflow,
 or additional token. Nix binary-cache publication is not configured.
 
@@ -656,6 +689,31 @@ smoke test checks `/healthz`, the Web entry point and assets, authentication-pag
 fallback, 404 responses for missing API routes and assets, and graceful shutdown
 before uploading its archive. Docker does not compile the Rust server or Web app
 again.
+
+### Super Agent image
+
+Each native Linux Build runner builds the root flake's `super-agent-image`
+output. The package uses the same locked Node, pnpm and workspace dependency
+fetches as the Web build. Its image includes Eve and the PostgreSQL bootstrap
+command. The image smoke test
+bootstraps a disposable PostgreSQL database, starts Eve, checks its private
+channel authentication, and sends a task through the Rust Team API. A scripted
+model drives Eve through MCP discovery and Session creation on a fixture
+daemon connection. The test checks the delegated actor and reads the resulting
+reply through the Team API. It uses a local Statsig gate override and requires
+no model credential.
+
+Eve uses Gateway model IDs and context windows to compile its dynamic model
+selector. `nix/super-agent-model-catalog.json` pins that input for offline
+builds. To refresh it, run `mise run super-agent:build` with access to the
+Gateway catalog, then run `mise exec -- node scripts/update-super-agent-model-catalog.ts`
+and review the snapshot. Model credentials and the operator's model selection
+are supplied at runtime.
+
+Tag builds publish the two tested architectures together under
+`ghcr.io/yet-another-ai/deskfleet-super-agent:<version>`. Stable releases also
+update `:latest`. See the [Super Agent guide](../../apps/super-agent/README.md#run-the-container)
+for the deployment commands.
 
 ### Experimental Nix server image
 
@@ -742,8 +800,8 @@ the locked Node archive, slow enough that mise's download budget expires first.
 The setup action rewrites `https://nodejs.org/dist/` to the npmmirror CDN on
 macOS only. The lockfile still records the nodejs.org URL and checksum, and
 mise checks the downloaded bytes against that checksum. Linux and Windows keep
-using nodejs.org. A throttled Actions cache restore or save is retried for up
-to two minutes; without that wait, HTTP 429 is treated as a missing tool cache.
+using nodejs.org. Test and Build jobs give mise their read-only job token for
+GitHub release metadata during tool installation, including on pull requests.
 
 Android CI jobs install `.github/actions/setup-gradle-mirror` into Gradle's
 `init.d` directory so hosted runners prefer Google's Maven Central mirror
@@ -798,20 +856,13 @@ profile above. mise-action exports them to later steps, so plain `cargo`
 steps see the same environment as `mise run`. Reproduce a CI build locally
 with `mise -E ci run <task>`.
 
-Only pushes and runs on `main` save caches. Pull requests and tags restore
-main's entries through the base-branch fallback, so their own copies would
-only spend the repository's 10 GB quota. Every save skips an exact hit.
-
-| Cache | Key | Writer |
-| --- | --- | --- |
-| mise tools | mise-action's key: OS, mise version, `MISE_ENV`, requested tools, and `mise.lock` | Every job on `main`; Node-only jobs have their own entry |
-| Cargo target | rust-cache's key: role, OS, architecture, Rust toolchain, `CARGO_*`/`RUST*` environment, and lockfiles | One job per role on `main` |
-| Cargo downloads | OS, architecture, and `Cargo.lock` | Jobs without a target role |
-| pnpm store | OS, architecture, and `pnpm-lock.yaml` | Every setup-build job on `main` |
-| Electron | OS, architecture, and the locked Electron version | Every setup-build job on `main` |
-
-Cargo target caches are keyed by role, not by job, so jobs that compile the
-same profiles and features share one entry per OS:
+The repository's 10 GB Actions cache budget goes to compiled Cargo dependency
+artifacts. The Rust cache action bundles Cargo registry and Git dependency
+data with the target directory. Its keys include the role, OS, architecture,
+Rust toolchain, relevant environment, and workspace dependencies. Only
+eligible jobs on `main` write entries. Eligible pull request jobs can restore
+main's entries, and a save skips an exact hit. Jobs that compile the same
+profiles and features share one entry per platform and role.
 
 | Role | Jobs | Saves |
 | --- | --- | --- |
@@ -819,29 +870,22 @@ same profiles and features share one entry per OS:
 | `test` | Tests on each platform; the PostgreSQL job restores Linux's entry | Tests only |
 | `release` | Build | Main smoke build only |
 
-Preflight caches only Cargo downloads. Tagged production builds restore no
-target directory, so a release never reuses outputs from an unrelated build.
-rust-cache saves after a failed test as well, because the build outputs are
-still valid. CI does not use sccache: one Actions cache object per compilation
-filled the quota and evicted the target caches.
+Preflight and tagged production builds use fresh Cargo directories. The Rust
+cache action saves compiled dependencies after a failed test as well. Per-crate
+sccache entries previously filled the quota and evicted Cargo target caches.
 
-The pnpm store and Cargo downloads fall back to the newest same-platform entry.
-Installed `node_modules` directories are rebuilt from the frozen lockfile, which
-also repopulates packages missing from a restored store. Keep the pnpm store
-intact after installation: `pnpm store prune` can remove original package
-snapshots still needed by the offline DeepSeek Harness deployment even when
-the installed dependencies work. Fallback stores may retain older packages;
-the cache cleanup below removes superseded Actions cache entries.
-`pnpm install` does not download Electron. On a main miss, setup-build runs
-`install-electron` and saves the archive on every OS, whichever job later
-launches Electron.
+Each job installs its locked mise tools and workspace packages directly. In
+CI, mise can download the pinned Cargo Shear release binary. Cargo downloads
+missing dependencies on demand, and jobs that launch Electron install its
+binary at first use. Keep the job's pnpm store intact after the frozen install
+because offline DeepSeek Harness deployment uses its package snapshots.
 
-After every run on `main`, `Prune caches` runs `scripts/ci-prune-caches.ts`.
-It deletes caches saved outside `main`, then groups main's entries by key
-without their input hashes and versions and keeps the newest of each group.
-Superseded entries are removed instead of waiting for LRU eviction, which could
-remove a live entry first. Run it locally with `GITHUB_REPOSITORY` and
-`GITHUB_TOKEN` set and `--dry-run` to list what it would delete.
+After each completed run on `main`, `Prune caches` runs
+`scripts/ci-prune-caches.ts`. It removes the retired mise, standalone Cargo
+download, pnpm store, and Electron archive entries, plus entries outside
+`main`. For active families it retains the newest key, grouping keys without
+their changing input hashes. Run it locally with `GITHUB_REPOSITORY` and
+`GITHUB_TOKEN` set and `--dry-run` to list its proposed deletions.
 
 Heron's Nix, coverage upload, Playwright, plug-in SDK, signing, and symbol-upload
 jobs are not part of this workflow. DeskFleet keeps the orchestrator, the reusable

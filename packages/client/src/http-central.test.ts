@@ -4,7 +4,7 @@ import { HttpCentralClient, HttpError } from "./http-central.ts"
 import { CentralRequestError, serializeCentralRequestError } from "./request-diagnostics.ts"
 import type { DeskfleetDesktopApi } from "./desktop-api.ts"
 import { remoteMachineClient } from "./remote.ts"
-import { MUX_PROFILE } from "./mux/protocol.ts"
+import { MUX_PROFILE } from "@deskfleet/protocol/mux"
 
 const clients: HttpCentralClient[] = []
 const requestBodies = new WeakMap<Request, Promise<string>>()
@@ -75,6 +75,232 @@ test("loads deployment STUN configuration without creating a peer and preserves 
   await expectRequest(f.fetch, 1, "https://fleet.example/api/network-configuration", {
     method: "GET", headers: { Accept: "application/json", Authorization: "Bearer application-token" }, signal: expect.any(AbortSignal),
   })
+})
+
+test("sends Team-scoped Super Agent operations and preserves caller-supplied retry IDs", async () => {
+  const f = setup()
+  const root = "https://fleet.example/api/teams/team%2F1/super-agent"
+  const session = { sessionId: "session/1" }
+  f.responses.push({ enabled: true }, [], { admitted: false }, session, { ...session, deliveryId: "d1" })
+  expect(await f.client.superAgentAvailability("team/1")).toEqual({ enabled: true })
+  expect(await f.client.superAgentSessions("team/1")).toEqual([])
+  expect(await f.client.superAgentUsage("team/1")).toEqual({ admitted: false })
+  expect(await f.client.createSuperAgentSession("team/1", "create-op")).toEqual(session)
+  expect(await f.client.sendSuperAgentMessage("team/1", session.sessionId, "send-op", "hello")).toEqual({ ...session, deliveryId: "d1" })
+  f.fetch.mockImplementationOnce(async input => {
+    captureBody(input)
+    return new Response(null, { status: 204 })
+  })
+  await f.client.cancelSuperAgentTurn("team/1", session.sessionId, "turn/1")
+  await expectRequest(f.fetch, 1, root + "/availability", { method: "GET" })
+  await expectRequest(f.fetch, 2, root + "/sessions", { method: "GET" })
+  await expectRequest(f.fetch, 3, root + "/usage", { method: "GET" })
+  await expectRequest(f.fetch, 4, root + "/sessions", { method: "POST", body: JSON.stringify({ operationId: "create-op" }) })
+  await expectRequest(f.fetch, 5, root + "/sessions/session%2F1/messages", { method: "POST", body: JSON.stringify({ operationId: "send-op", message: "hello" }) })
+  await expectRequest(f.fetch, 6, root + "/sessions/session%2F1/cancel", { method: "POST", body: JSON.stringify({ turnId: "turn/1" }) })
+})
+
+test("reads and updates Team Super Agent configuration and registers BYOA machine sessions", async () => {
+  const f = setup()
+  const root = "https://fleet.example/api/teams/team%2F1/super-agent"
+  const config = {
+    mode: "byoa" as const, hostedConfigured: true, canConfigure: true,
+    byoa: { machineId: "m1", machineName: "Mac Studio", machineOnline: true, providerId: "claude-code", providerName: "Claude Code", yolo: true },
+  }
+  const registered = {
+    sessionId: "42", title: "Release audit", lastActiveAt: 1700000000000, engine: "byoa" as const,
+    machineId: "m1", machineName: "Mac Studio", providerId: "claude-code", providerName: "Claude Code",
+  }
+  f.responses.push(config, config, registered)
+  expect(await f.client.superAgentConfig("team/1")).toEqual(config)
+  expect(await f.client.updateSuperAgentConfig("team/1", { mode: "byoa", byoa: { machineId: "m1", providerId: "claude-code", providerName: "Claude Code", yolo: true } })).toEqual(config)
+  expect(await f.client.registerSuperAgentMachineSession("team/1", { machineId: "m1", sessionId: "42", providerId: "claude-code", providerName: "Claude Code", title: "Release audit" })).toEqual(registered)
+  await expectRequest(f.fetch, 1, root + "/config", { method: "GET" })
+  await expectRequest(f.fetch, 2, root + "/config", { method: "PUT", body: JSON.stringify({ mode: "byoa", byoa: { machineId: "m1", providerId: "claude-code", providerName: "Claude Code", yolo: true } }) })
+  await expectRequest(f.fetch, 3, root + "/machine-sessions", { method: "POST", body: JSON.stringify({ machineId: "m1", sessionId: "42", providerId: "claude-code", providerName: "Claude Code", title: "Release audit" }) })
+})
+
+test("sends ordered rich message parts when creating and continuing a Super Agent Session", async () => {
+  const f = setup()
+  const parts = [
+    { type: "text", text: "Compare the screenshot and the report." },
+    { type: "file", mediaType: "image/png", filename: "screen.png", data: "data:image/png;base64,iVBORw0KGgo=" },
+    { type: "file", mediaType: "application/pdf", data: "https://assets.example/report.pdf" },
+  ] as const
+  const sessionId = "session"
+  const root = "https://fleet.example/api/teams/team/super-agent/sessions"
+  f.responses.push({ sessionId, deliveryId: "first" }, { sessionId, deliveryId: "next" })
+  const created = await f.client.createSuperAgentSession("team", "create-op", parts)
+  expect(created.deliveryId).toBe("first")
+  expect(await f.client.sendSuperAgentMessage("team", created.sessionId, "follow-up", [parts[1]]))
+    .toEqual({ sessionId, deliveryId: "next" })
+  await expectRequest(f.fetch, 1, root, { method: "POST", body: JSON.stringify({ operationId: "create-op", message: parts }) })
+  await expectRequest(f.fetch, 2, root + "/session/messages", { method: "POST", body: JSON.stringify({ operationId: "follow-up", message: [parts[1]] }) })
+})
+
+test("replays committed chat over the authenticated stream, advancing its durable cursor", async () => {
+  const f = setup()
+  const at = "2026-11-21T10:00:00Z"
+  const body = [
+    { $eve: "position", next: 3 }, { $eve: "heartbeat" },
+    { at, facts: [{ type: "delivery.consumed", data: { deliveryId: "d1", parts: [{ kind: "text", text: "hello" }] } }] },
+    { progress: { type: "content.delta", data: { partId: "p1", delta: "hel" } } },
+    { at, facts: [
+      { type: "content.completed", data: { partId: "hidden", phase: "reply", kind: "reasoning", value: "private" } },
+      { type: "content.completed", data: { partId: "p1", phase: "reply", kind: "text", value: "hi" } },
+      { type: "turn.settled", data: { outcome: "completed" } },
+    ] },
+  ].map(line => JSON.stringify(line)).join("\n") + "\n"
+  const headers = { "Content-Type": "application/x-ndjson", "x-eve-stream-version": "27", "x-eve-stream-tail-index": "5" }
+  f.fetch.mockResolvedValueOnce(new Response(body, { headers }))
+  expect(await f.client.superAgentHistory("team/1", "s", 2)).toEqual({
+    messages: [{ id: "d1", at, role: "user", text: "hello" }, { id: "p1", at, role: "assistant", text: "hi" }],
+    status: "idle", nextIndex: 6,
+  })
+  await expectRequest(f.fetch, 1, "https://fleet.example/api/teams/team%2F1/super-agent/sessions/s/stream?startIndex=2", {
+    method: "GET", headers: { Authorization: "Bearer application-token", Accept: "application/x-ndjson" },
+  })
+  f.fetch.mockResolvedValueOnce(new Response(null, { headers }))
+  expect(await f.client.superAgentHistory("team/1", "s", 6)).toEqual({ messages: [], nextIndex: 6 })
+  f.fetch.mockResolvedValueOnce(new Response(null, { headers }))
+  await expect(f.client.superAgentHistory("team/1", "s", 5)).rejects.toThrow("Incomplete Super Agent history")
+  for (const marker of ["stream.ended", "stream.lease-ended"]) {
+    f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ $eve: marker }), { headers }))
+    expect(await f.client.superAgentHistory("team/1", "s", 5)).toEqual({ messages: [], nextIndex: 5 })
+  }
+  f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({ at, facts: [{ type: "delivery.settled", data: { deliveryId: "d2", outcome: "refused" } }] }), { headers: { ...headers, "x-eve-stream-tail-index": "6" } }))
+  expect(await f.client.superAgentHistory("team/1", "s", 6)).toEqual({ messages: [], undeliveredIds: ["d2"], status: "failed", nextIndex: 7 })
+  f.fetch.mockResolvedValueOnce(Response.json({ error: { code: "super_agent_disabled", message: "Super Agent is disabled" } }, { status: 404 }))
+  await expect(f.client.superAgentHistory("team/1", "s", 6)).rejects.toMatchObject({ diagnostics: { status: 404, apiErrorCode: "super_agent_disabled" } })
+})
+
+test("joins sender principals to consumed messages across history reads", async () => {
+  const f = setup()
+  const at = "2026-11-21T10:00:00Z"
+  const page = (tail: number, facts: unknown[]) => new Response(JSON.stringify({ at, facts }), {
+    headers: { "x-eve-stream-version": "27", "x-eve-stream-tail-index": String(tail) },
+  })
+  const admitted = (deliveryId: string, id: string, type = "user") => ({ type: "delivery.admitted", data: { deliveryId, principal: { id, type } } })
+  const consumed = (deliveryId: string, text: string) => ({ type: "delivery.consumed", data: { deliveryId, parts: [{ kind: "text", text }] } })
+  f.fetch.mockResolvedValueOnce(page(0, [admitted("a", "ada"), admitted("b", "bob"), admitted("rejected", "ada")]))
+  const first = await f.client.superAgentHistory("team", "s", 0)
+  expect(first).toEqual({
+    nextIndex: 1, messages: [], status: "working", pendingSenders: [["a", "ada"], ["b", "bob"], ["rejected", "ada"]],
+  })
+
+  f.fetch.mockResolvedValueOnce(page(1, [
+    { type: "delivery.settled", data: { deliveryId: "rejected", outcome: "refused" } },
+    consumed("b", "Review the dates"),
+    admitted("old", "deskfleet-server", "service"),
+    consumed("old", "Update the plan"),
+  ]))
+  const second = await f.client.superAgentHistory("team", "s", first.nextIndex, first.pendingSenders)
+  expect(second).toEqual({
+    nextIndex: 2, status: "working", undeliveredIds: ["rejected"], pendingSenders: [["a", "ada"]],
+    messages: [
+      { id: "b", at, role: "user", text: "Review the dates", senderId: "bob" },
+      { id: "old", at, role: "user", text: "Update the plan" },
+    ],
+  })
+  f.fetch.mockResolvedValueOnce(page(2, [consumed("a", "Plan our release")]))
+  expect(await f.client.superAgentHistory("team", "s", second.nextIndex, second.pendingSenders)).toEqual({
+    nextIndex: 3, status: "working",
+    messages: [{ id: "a", at, role: "user", text: "Plan our release", senderId: "ada" }],
+  })
+})
+
+test("projects hosted turn lifecycles and ordered rich input across history pages", async () => {
+  const f = setup()
+  const start = "2026-11-21T10:00:00Z"
+  const end = "2026-11-21T10:00:06Z"
+  const turnId = "turn-1"
+  const parts = [
+    { kind: "text", text: "Inspect the design" },
+    { kind: "file", filename: "design.png", mediaType: "image/png" },
+    { kind: "text", text: "Focus on contrast" },
+  ]
+  const response = (tail: number, at: string, facts: unknown[]) => new Response(JSON.stringify({ at, facts }), {
+    headers: { "x-eve-stream-version": "27", "x-eve-stream-tail-index": String(tail) },
+  })
+  f.fetch.mockResolvedValueOnce(response(0, start, [
+    { type: "turn.started", data: { turnId } },
+    { type: "delivery.consumed", data: { deliveryId: "d1", turnId, parts } },
+    { type: "content.completed", scope: { turnId }, data: { partId: "p1", kind: "text", phase: "narration", value: "Checking contrast." } },
+  ]))
+  expect(await f.client.superAgentHistory("team", "session", 0)).toEqual({
+    nextIndex: 1, status: "working", turns: [{ id: turnId, state: "running", startedAt: start }],
+    messages: [
+      { id: "d1", at: start, role: "user", turnId, parts, text: "Inspect the design\nFocus on contrast" },
+      { id: "p1", at: start, role: "assistant", turnId, text: "Checking contrast." },
+    ],
+  })
+  f.fetch.mockResolvedValueOnce(response(1, end, [{ type: "turn.settled", data: { turnId, outcome: "cancelled" } }]))
+  expect(await f.client.superAgentHistory("team", "session", 1)).toEqual({
+    nextIndex: 2, status: "idle", messages: [], turns: [{ id: turnId, state: "cancelled", endedAt: end }],
+  })
+})
+
+test("continues announced text previews across reads and replaces them with committed content", async () => {
+  const f = setup()
+  const turnId = "turn-1"
+  const progress = (partId: string, delta: string, kind?: string) => ({
+    progress: { type: "content.delta", scope: { turnId }, data: { partId, kind, delta } },
+  })
+  const response = (tail: number, records: unknown[]) => new Response(records.map(record => JSON.stringify(record)).join("\n"), {
+    headers: { "x-eve-stream-version": "27", "x-eve-stream-tail-index": String(tail) },
+  })
+  f.fetch.mockResolvedValueOnce(response(1, [progress("reply", "Read", "text"), progress("hidden", "Private", "reasoning")]))
+  const first = await f.client.superAgentHistory("team", "session", 0)
+  expect(first.previews).toEqual([{ id: "reply", text: "Read", turnId }])
+
+  f.fetch.mockResolvedValueOnce(response(3, [progress("hidden", " reasoning"), progress("reply", "y")]))
+  const second = await f.client.superAgentHistory("team", "session", first.nextIndex, undefined, first.previews)
+  expect(second.previews).toEqual([{ id: "reply", text: "Ready", turnId }])
+
+  const at = "2026-11-21T10:00:06Z"
+  f.fetch.mockResolvedValueOnce(response(4, [{ at, facts: [
+    { type: "content.completed", scope: { turnId }, data: { partId: "reply", kind: "text", phase: "reply", value: "Ready." } },
+  ] }]))
+  expect(await f.client.superAgentHistory("team", "session", second.nextIndex, undefined, second.previews)).toEqual({
+    nextIndex: 5, messages: [{ id: "reply", role: "assistant", at, text: "Ready.", turnId }],
+  })
+})
+
+test("does not treat a stale cancel receipt as an undelivered message", async () => {
+  const f = setup()
+  const at = "2026-11-21T10:00:06Z"
+  const turnId = "turn-1"
+  const cancel = (deliveryId: string, outcome: string) => [
+    { type: "delivery.admitted", data: { deliveryId, source: { control: "cancel" } } },
+    { type: "delivery.settled", data: { deliveryId, outcome } },
+  ]
+  const lines = [
+    { at, facts: [
+      ...cancel("actual", "applied"),
+      { type: "turn.settled", data: { turnId, outcome: "cancelled" } },
+    ] },
+    { at, facts: cancel("stale", "ignored") },
+  ]
+  f.fetch.mockResolvedValueOnce(new Response(lines.map(line => JSON.stringify(line)).join("\n"), {
+    headers: { "x-eve-stream-version": "27", "x-eve-stream-tail-index": "1" },
+  }))
+  expect(await f.client.superAgentHistory("team", "session", 0)).toEqual({
+    nextIndex: 2, status: "idle", messages: [], turns: [{ id: turnId, state: "cancelled", endedAt: at }],
+  })
+})
+
+test("allows Super Agent history to finish within the gateway's replay deadline", async () => {
+  vi.useFakeTimers()
+  const f = setup()
+  f.fetch.mockImplementation(input => new Promise((resolve, reject) => {
+    const { signal } = input as Request
+    const timer = setTimeout(() => resolve(new Response(null, { headers: { "x-eve-stream-version": "27", "x-eve-stream-tail-index": "-1" } })), 119_000)
+    signal.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason) }, { once: true })
+  }))
+  const history = f.client.superAgentHistory("team", "session", 0)
+  await vi.advanceTimersByTimeAsync(119_000)
+  expect(await history).toEqual({ messages: [], nextIndex: 0 })
+  expect(f.fetch).toHaveBeenCalledOnce()
 })
 
 test("loads installation usage trends through the authenticated admin endpoint", async () => {

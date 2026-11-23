@@ -1,3 +1,4 @@
+import { adminPlanQuotasFixture, creditRatesFixture, planCatalogFixture } from "../src/test/plan-quotas.ts"
 import { computed, type ComputedRef } from "vue"
 import { createPinia } from "pinia"
 import { createMemoryHistory, createRouter } from "vue-router"
@@ -15,8 +16,8 @@ import type { ScheduleInput, ScheduleRun, ScheduledTask } from "@deskfleet/clien
 import type { SystemStatus } from "@deskfleet/client/system"
 import type { AgentConfiguration } from "@deskfleet/client/agent-configuration"
 import type { ProviderDisplay } from "@deskfleet/client/providers"
-import type { AgentElicitation, AgentEvent, AgentPermission, AgentSessionRecord, AgentSnapshot } from "../../../apps/daemon/src/agent-protocol.ts"
-import { AGENT_PROVIDER_TEMPLATES, type AgentProviderConfig } from "../../../apps/daemon/src/provider-protocol.ts"
+import type { AgentElicitation, AgentEvent, AgentPermission, AgentSessionRecord, AgentSnapshot } from "@deskfleet/protocol/agent"
+import { AGENT_PROVIDER_TEMPLATES, type AgentProviderConfig } from "@deskfleet/protocol/provider"
 import { accountSessionKey, createAccountSession, type AccountSession } from "../src/composables/useAccountSession.ts"
 import { appearanceStoreKey, useAppearanceStore } from "../src/stores/appearance.ts"
 import { useFleetStore } from "../src/stores/fleet.ts"
@@ -185,7 +186,9 @@ export const storybookFileTransfers: FileTransfer[] = [
 
 export const storybookBilling: TeamBilling = {
   plan: "pro",
+  planCatalog: planCatalogFixture().map(entry => entry.plan === "pro" ? { ...entry, maxActiveSessions: 25, maxTurnsPerSession: 200, maxMembers: 10, turnBytes: 10_737_418_240 } : entry),
   limits: {
+    teamTurnServers: true, superAgentTokens: 0,
     maxActiveSessions: 25,
     maxTurnsPerSession: 200,
     maxMembers: 10,
@@ -591,6 +594,8 @@ export const storybookArchivedSessionRecord: AgentSessionRecord = {
 }
 
 export function createStorybookCentral(): CentralApi & SiteAdministrationApi {
+  let planQuotas = adminPlanQuotasFixture()
+  let rates = { ...creditRatesFixture }
   const listeners = new Set<(event: CentralEvent) => void>()
   let site: SiteSettings = {
     siteName: "DeskFleet Cloud",
@@ -601,6 +606,7 @@ export function createStorybookCentral(): CentralApi & SiteAdministrationApi {
     privacyTermsUrl: "https://deskfleet.dev/privacy",
   }
   let registrationEnabled = true
+  let captchaEnabled = false
   let turn: TurnSettings = { urls: ["turn:turn.example.com:3478?transport=udp"], allowTeamServers: true }
   let cloudflareTurn = { enabled: false, accountId: "", keyId: "", apiTokenConfigured: false, analyticsTokenConfigured: false }
   let teamTurn: TeamTurnSettings = { availability: "available", urls: [], secretConfigured: false }
@@ -652,6 +658,14 @@ export function createStorybookCentral(): CentralApi & SiteAdministrationApi {
       return { ...site }
     },
     turnSettings: async () => ({ ...turn, urls: [...turn.urls] }),
+    creditRates: async () => ({ ...rates }),
+    updateCreditRates: async next => { rates = { ...next }; return { ...rates } },
+    planQuotas: async () => planQuotas.map(row => ({ ...row })),
+    updatePlanQuota: async (plan, limits) => {
+      const updated = { plan, ...limits }
+      planQuotas = planQuotas.map(row => row.plan === plan ? updated : row)
+      return updated
+    },
     updateTurnSettings: async next => {
       turn = { ...next, urls: [...next.urls] }
       return { ...turn, urls: [...turn.urls] }
@@ -677,8 +691,9 @@ export function createStorybookCentral(): CentralApi & SiteAdministrationApi {
     setManualGrant: async () => {},
     deletionRequests: async () => ({ requests: [], nextCursor: null }),
     reviewDeletionRequest: async () => {},
-    registrationPolicy: async () => ({ registrationEnabled }),
+    registrationPolicy: async () => ({ registrationEnabled, captchaEnabled }),
     updateRegistration: async (enabled: boolean) => { registrationEnabled = enabled },
+    updateCaptcha: async (enabled: boolean) => { captchaEnabled = enabled },
     users: async () => [
       { id: "user-1", name: "Ada Lovelace", email: "ada@deskfleet.dev", disabled: false },
       { id: "user-2", name: "Grace Hopper", email: "grace@deskfleet.dev", disabled: false },
@@ -698,6 +713,43 @@ export function createStorybookCentral(): CentralApi & SiteAdministrationApi {
     },
     members: async () => structuredClone(members),
     teamUsage: async () => ({ relayedBytes: "3221225472", activeSessionCount: 8, memberCount: members.length }),
+    superAgentAvailability: async () => ({ enabled: false }),
+    superAgentConfig: async () => ({ mode: "hosted", hostedConfigured: true, canConfigure: true, byoa: null }),
+    updateSuperAgentConfig: async (_teamId, update) => ({
+      mode: update.mode,
+      hostedConfigured: true,
+      canConfigure: true,
+      byoa: update.byoa ? {
+        machineId: update.byoa.machineId,
+        machineName: machines.find(m => m.id === update.byoa!.machineId)?.name ?? update.byoa.machineId,
+        machineOnline: true,
+        providerId: update.byoa.providerId,
+        providerName: update.byoa.providerName ?? null,
+        cwd: update.byoa.cwd ?? null,
+        yolo: !!update.byoa.yolo,
+      } : null,
+    }),
+    superAgentSessions: async () => [],
+    registerSuperAgentMachineSession: async (_teamId, input) => ({
+      sessionId: input.sessionId,
+      title: input.title ?? null,
+      lastActiveAt: input.lastActiveAt ?? Date.now(),
+      engine: "byoa",
+      machineId: input.machineId,
+      machineName: machines.find(m => m.id === input.machineId)?.name ?? input.machineId,
+      providerId: input.providerId,
+      providerName: input.providerName ?? null,
+    }),
+    superAgentUsage: async () => ({
+      runtimeConfigured: true, admitted: true, usedCredits: "0", includedCredits: null, usedTokens: 0, includedTokens: null, plan: "selfHosted",
+      start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z",
+    }),
+    createSuperAgentSession: async (_teamId, operationId, message) => ({
+      sessionId: `wrun_${operationId}`, ...(message === undefined ? {} : { deliveryId: `delivery_${operationId}` }),
+    }),
+    sendSuperAgentMessage: async (_teamId, sessionId, operationId) => ({ sessionId, deliveryId: `delivery_${operationId}` }),
+    cancelSuperAgentTurn: async () => {},
+    superAgentHistory: async (_teamId, _sessionId, startIndex) => ({ messages: [], nextIndex: startIndex }),
     teamTurnSettings: async () => structuredClone(teamTurn),
     updateTeamTurnSettings: async (_teamId: string, next: TeamTurnSettingsUpdate) => {
       teamTurn = { ...teamTurn, urls: [...next.urls], secretConfigured: next.urls.length > 0 && (teamTurn.secretConfigured || next.secret !== undefined) }
@@ -872,6 +924,7 @@ export function createStorybookDesktopApi(): DeskfleetDesktopApi {
   let keepAwake = false
   let autoDownloadUpdates = true
   let pauseUpdatesOnMetered = true
+  let installUpdatesOnQuit = true
   let launchAtStartup = false
   let worktreeRoot: string | null = "/Users/ada/.deskfleet/worktrees"
   let worktreePreferences: WorktreePreferences = { branchNaming: "semantic", cleanup: { archived: true, merged: true, inactive: true, inactiveDays: 5, settled: true, settledDays: 6, unchanged: true, keepLocalChanges: "uncommitted" } }
@@ -936,9 +989,10 @@ export function createStorybookDesktopApi(): DeskfleetDesktopApi {
       setLaunchAtStartup: async (enabled) => ({ available: true, enabled: (launchAtStartup = enabled) }),
       getKeepAwake: async () => ({ enabled: keepAwake }),
       setKeepAwake: async (enabled) => ({ enabled: (keepAwake = enabled) }),
-      getAutoDownloadUpdates: async () => ({ enabled: autoDownloadUpdates, pauseOnMetered: pauseUpdatesOnMetered, installSource: "desktop_installer" }),
-      setAutoDownloadUpdates: async (enabled) => ({ enabled: (autoDownloadUpdates = enabled), pauseOnMetered: pauseUpdatesOnMetered, installSource: "desktop_installer" }),
-      setPauseUpdatesOnMetered: async (enabled) => ({ enabled: autoDownloadUpdates, pauseOnMetered: (pauseUpdatesOnMetered = enabled), installSource: "desktop_installer" }),
+      getAutoDownloadUpdates: async () => ({ enabled: autoDownloadUpdates, pauseOnMetered: pauseUpdatesOnMetered, installOnQuit: installUpdatesOnQuit, installSource: "desktop_installer" }),
+      setAutoDownloadUpdates: async (enabled) => ({ enabled: (autoDownloadUpdates = enabled), pauseOnMetered: pauseUpdatesOnMetered, installOnQuit: installUpdatesOnQuit, installSource: "desktop_installer" }),
+      setPauseUpdatesOnMetered: async (enabled) => ({ enabled: autoDownloadUpdates, pauseOnMetered: (pauseUpdatesOnMetered = enabled), installOnQuit: installUpdatesOnQuit, installSource: "desktop_installer" }),
+      setInstallUpdatesOnQuit: async (enabled) => ({ enabled: autoDownloadUpdates, pauseOnMetered: pauseUpdatesOnMetered, installOnQuit: (installUpdatesOnQuit = enabled), installSource: "desktop_installer" }),
       getWorktreeRoot: async () => ({ root: worktreeRoot, defaultRoot: "/Users/ada/.deskfleet/worktrees" }),
       getWorktreePreferences: async () => structuredClone(worktreePreferences),
       setWorktreePreferences: async (settings) => structuredClone(worktreePreferences = settings),

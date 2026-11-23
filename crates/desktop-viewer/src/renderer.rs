@@ -7,10 +7,10 @@ pub(crate) use ndk::native_window::NativeWindow;
 
 #[cfg(target_os = "ios")]
 #[derive(Clone, Debug)]
-pub(crate) struct NativeWindow(objc2_core_foundation::CFRetained<objc2_core_foundation::CFType>);
+pub(crate) struct NativeWindow(objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>);
 
 #[cfg(target_os = "ios")]
-// SAFETY: `CAMetalLayer` reference counting via `CFRetain`/`CFRelease` is thread-safe,
+// SAFETY: `CAMetalLayer` reference counting is thread-safe,
 // and `wgpu`'s Metal backend synchronizes layer access internally.
 unsafe impl Send for NativeWindow {}
 #[cfg(target_os = "ios")]
@@ -19,17 +19,12 @@ unsafe impl Sync for NativeWindow {}
 
 #[cfg(target_os = "ios")]
 impl NativeWindow {
-    /// # Safety
-    /// `layer` must be a valid non-null `CAMetalLayer` pointer.
-    pub(crate) unsafe fn retain_layer(layer: std::ptr::NonNull<std::ffi::c_void>) -> Self {
-        // SAFETY: `CAMetalLayer` is toll-free bridged with CoreFoundation reference counting.
-        Self(unsafe { objc2_core_foundation::CFRetained::retain(layer.cast()) })
+    pub(crate) fn from_layer(layer: objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>) -> Self {
+        Self(layer)
     }
 
     fn as_ptr(&self) -> *mut std::ffi::c_void {
-        std::ptr::from_ref::<objc2_core_foundation::CFType>(self.0.as_ref())
-            .cast_mut()
-            .cast()
+        objc2::rc::Retained::as_ptr(&self.0).cast_mut().cast()
     }
 
     fn width(&self) -> i32 {
@@ -41,6 +36,7 @@ impl NativeWindow {
     }
 }
 
+use crate::zoom::Zoom;
 use crate::{Error, Frame};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,7 +310,12 @@ impl Renderer {
         Ok(())
     }
 
-    pub(crate) fn draw(&self, output: wgpu::SurfaceTexture) -> Result<(), Error> {
+    /// The largest viewport extent; zoom never presents a larger rect.
+    pub(crate) fn max_viewport(&self) -> f64 {
+        f64::from(self.device.limits().max_texture_dimension_2d)
+    }
+
+    pub(crate) fn draw(&self, output: wgpu::SurfaceTexture, zoom: &Zoom) -> Result<(), Error> {
         let view = output.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -335,7 +336,10 @@ impl Renderer {
                 multiview_mask: None,
             });
             if let Some((_, image)) = &self.image {
-                let (x, y, width, height) = viewport(self.current_size(), self.video_size);
+                let size = self.current_size();
+                let surface = (f64::from(size.width), f64::from(size.height));
+                // A zoomed rect may start off-screen; wgpu clips it to the target.
+                let (x, y, width, height) = zoom.rect(surface, viewport(size, self.video_size));
                 pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0., 1.);
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, image, &[]);

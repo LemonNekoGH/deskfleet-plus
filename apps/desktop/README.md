@@ -102,6 +102,7 @@ collection.
 | `src/shared` | Code imported by more than one process | Inlined into each bundle |
 | `packages/components` | Shared Vue UI and locale catalogs for desktop and web | Inlined into renderer |
 | `packages/client` | Platform contracts and remote transport | Inlined into host bundles |
+| `packages/protocol` | Wire contracts shared with the daemon | Inlined into every bundle that imports it |
 | `build` | Packaging input and runtime window and tray images | Selected files in `app.asar` |
 
 Each process has its own Vite configuration (`vite.main.config.ts`,
@@ -112,6 +113,14 @@ Each process has its own Vite configuration (`vite.main.config.ts`,
 The production client signs in to a configured backend through its owned account system and selects
 a team and an enrolled machine. The Electron main process owns account HTTP and
 WebSocket connections and stores the application token using Electron safeStorage.
+The hosted daemon authenticates separately with `<userData>/daemon/central.json`
+and starts before `safeStorage` account decryption, so a locked or cancelled
+Linux keyring prompt does not block remote daemon reconnection or abort startup.
+On Linux, users who want unattended restarts and AppImage updates without system
+keyring prompts can disable **Settings → Preferences → Use system keyring**
+(persisted in `<userData>/linux-keyring.json` and applied via Chromium's
+`--password-store=basic` before `app.whenReady()`), or override the backend with
+`--password-store=<backend>` or `DESKFLEET_PASSWORD_STORE=<backend>`.
 A narrow preload adapter exposes operations and events without exposing that token
 to the renderer. The browser callback uses a temporary loopback listener and a
 client verifier bound to the one-time login code.
@@ -679,20 +688,22 @@ integrity validation and disable the `NODE_OPTIONS` and `--inspect` fuses.
 electron-builder signs macOS builds when it finds a signing identity; set
 `CSC_IDENTITY_AUTO_DISCOVERY=false` for unsigned local builds.
 
-Windows packaging also builds and bundles `deskfleet-desktop-service.exe` in
-`resources/windows/`. Settings → Permissions → **Remote control while locked**
-uses this helper's fixed setup commands to install or remove the optional
-`DeskFleetDesktop` system service with UAC approval. The application remains a
-per-user install; merely opening Settings does not request elevation. The helper
-owns its protected Program Files installation and service stop/start lifecycle.
-Installer updates maintain an already-installed service without enabling it on
-other machines. An ordinary uninstall removes the service, while the uninstall
-phase of an application update preserves it. Updating or removing the service
-can require administrator approval. Service updates stage a protected recovery
+Windows packaging also builds and bundles `deskfleet-desktop-service.exe` and
+`deskfleet-maintenance-service.exe` in `resources/windows/`, along with
+`deskfleet-desktop-service.manifest.json` when release signing is configured.
+Settings → Permissions → **Remote control while locked** uses the helper's fixed
+setup commands to install or remove both the optional `DeskFleetDesktop` system
+service and the on-demand `DeskFleetMaintenance` updater service with UAC
+approval. The application remains a per-user install; merely opening Settings
+does not request elevation. NSIS updates do not prompt for UAC or block
+restarting the updated app. After restart, the app automatically applies signed
+updates to an already-installed `DeskFleetDesktop` service through
+`DeskFleetMaintenance` without UAC; unsigned builds and legacy installations
+without `DeskFleetMaintenance` expose an online **Update** button in Settings.
+An ordinary uninstall removes both services, while the uninstall phase of an
+application update preserves them. Service updates stage a protected recovery
 copy before stopping the previous process and restore it if the replacement
-cannot start. A cancelled or failed maintenance step
-aborts the installer and requires rerunning it; it does not roll back an already
-extracted application payload. See [native media](../../agents/docs/media.md#windows-locked-desktop-access)
+cannot start. See [native media](../../agents/docs/media.md#windows-locked-desktop-access)
 for the console-session boundary and runtime requirements.
 
 Linux packaging produces both an AppImage and a desktop `tar.gz` archive from
@@ -737,6 +748,7 @@ Configure these secrets in the same environment:
 | `APPLE_API_KEY_P8` | Base64-encoded App Store Connect API `.p8` private key. |
 | `APPLE_API_KEY_ID` | App Store Connect API key ID. |
 | `APPLE_API_ISSUER` | App Store Connect API issuer ID. |
+| `WINDOWS_SERVICE_SIGNING_KEY` | Optional base64-encoded PKCS#8 Ed25519 private key used to sign `deskfleet-desktop-service.manifest.json` during Windows packaging (paired with the `DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS` variable). |
 
 The release workflow decodes the API key into a temporary runner file and passes
 it as `APPLE_API_KEY`, alongside `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`.
@@ -764,8 +776,10 @@ The static vector brand master lives in
 `mise exec -- pnpm --filter @deskfleet/desktop icons` to regenerate the app, tray,
 Web, and website icons from it. The website and modern favicons use SVG. Native
 icons, touch icons, fallback favicons, and social previews use generated raster
-assets. `build/icon.png` is the source for the macOS
-`.icns` and Windows `.ico`. The tray uses `build/trayTemplate*.png` on macOS,
+assets. `build/icon.png` is the full-bleed source for the Windows `.ico`, Linux
+packages, and in-app About/window icons. `build/icon-mac.png` follows Apple's
+824-on-1024 grid so the packaged macOS `.icns` matches neighboring Dock and
+Finder icons. The tray uses `build/trayTemplate*.png` on macOS,
 with the artwork's luminance adapted to an alpha mask for system tinting, and
 full-color `build/tray*.png` elsewhere. Commit generated assets with the source.
 

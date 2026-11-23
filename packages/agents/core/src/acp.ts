@@ -279,7 +279,7 @@ export async function connectAcpProcess(launch: AgentProcess, client: AgentClien
   try {
     const initialization = await connection.agent.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
-      clientInfo: { name: "deskfleet", title: "DeskFleet", version: "0.19.0" },
+      clientInfo: { name: "deskfleet", title: "DeskFleet", version: "0.22.0" },
       clientCapabilities: {
         ...options.clientCapabilities,
         session: {
@@ -388,6 +388,8 @@ export async function connectAcpProcess(launch: AgentProcess, client: AgentClien
               cwd: params.cwd,
               mcpServers: params.mcpServers ?? [],
               ...(params.additionalDirectories?.length ? { additionalDirectories: params.additionalDirectories } : {}),
+              ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+              ...(params._meta ? { _meta: params._meta } : {}),
             })
             sessionScope.complete(params.sessionId)
             return present(params.sessionId, loaded)

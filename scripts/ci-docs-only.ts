@@ -33,10 +33,16 @@ export function isPackagingPath(path: string): boolean {
   return /^(?:packaging|nix)\//u.test(path) ||
     /^(?:flake\.nix|flake\.lock)$/u.test(path) ||
     /^scripts\/(?:package-|check-(?:aur|linux-release)|smoke-linux-package|stage-native-binaries|build-(?:android|ios)-viewer\.ts)/u.test(path) ||
-    /^scripts\/(?:app-store-connect|prepare-ios-signing|publish-ios-release)\.ts$/u.test(path) ||
-    /^\.github\/workflows\/(?:build|nix|nix-server|aur|aur-publish|linux-packages)\.yml$/u.test(path) ||
+    /^scripts\/(?:app-store-connect|prepare-ios-signing|publish-ios-release|windows-service-signing)\.ts$/u.test(path) ||
+    /^\.github\/workflows\/(?:build|publish|nix|nix-server|aur|aur-publish|linux-packages)\.yml$/u.test(path) ||
     path.startsWith(".github/actions/setup-gradle-mirror/") ||
     path === "apps/desktop/package.json" ||
+    path === "apps/server/Dockerfile" ||
+    path.startsWith("apps/super-agent/") ||
+    path.startsWith("apps/server/src/cloud_agent/") ||
+    path === "tsconfig.json" ||
+    /^scripts\/smoke-(?:server|super-agent)-image\.ts$/u.test(path) ||
+    path === "scripts/fixtures/image-smoke.ts" ||
     path === "apps/web/capacitor.config.ts" ||
     path.startsWith("apps/web/android/") ||
     path.startsWith("apps/web/ios/") ||
@@ -64,7 +70,7 @@ export function hasMatchingChanges(raw: string, matcher: (path: string) => boole
 
 export function isPlatformPath(path: string): boolean {
   return path.endsWith(".rs") ||
-    /^(?:crates|apps\/desktop|apps\/desktop-service|apps\/daemon|apps\/web\/(?:android|ios)|packages\/agents|packages\/capacitor-bridge|packages\/client|packages\/mcp|packages\/dsh-runtime|vendor)\//u.test(path) ||
+    /^(?:crates|apps\/desktop|apps\/desktop-service|apps\/maintenance-service|apps\/daemon|apps\/web\/(?:android|ios)|packages\/agents|packages\/capacitor-bridge|packages\/client|packages\/mcp|packages\/dsh-runtime|vendor)\//u.test(path) ||
     path === "apps/web/capacitor.config.ts" ||
     /^(?:Cargo\.toml|Cargo\.lock|mise\.toml|mise\.ci\.toml|mise\.lock|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$/u.test(path) ||
     /^(?:\.github\/(?:workflows|actions)|scripts)\//u.test(path) ||

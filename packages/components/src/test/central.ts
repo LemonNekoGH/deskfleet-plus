@@ -1,12 +1,16 @@
+import { adminPlanQuotasFixture, creditRatesFixture, planCatalogFixture, quotaFixture } from "./plan-quotas.ts"
 import { vi } from "vitest"
-import type { AdminTeamBillingPage, AdminTeamBillingQuery, TeamBilling } from "../../../client/src/billing.ts"
-import type { AccountDeletionRequestPage } from "../../../client/src/account-deletion.ts"
-import type { AiUsageQuery, TeamAiUsage, TeamAiUsageSessions } from "../../../client/src/ai-usage.ts"
-import type { SiteUsagePeriod, SiteUsageTrends } from "../../../client/src/site-usage.ts"
-import type { CentralApi, CentralEvent, LocalEnrollment, Machine, SiteSettings, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, Team, TeamMember, TeamTurnAvailability, TeamTurnSettingsUpdate } from "../../../client/src/central.ts"
+import type { CreditRates, HostedPlan, PlanQuota } from "@deskfleet/client/billing"
+import type { AdminPlanQuota } from "@deskfleet/client/central"
+import type { AdminTeamBillingPage, AdminTeamBillingQuery, TeamBilling } from "@deskfleet/client/billing"
+import type { AccountDeletionRequestPage } from "@deskfleet/client/account-deletion"
+import type { AiUsageQuery, TeamAiUsage, TeamAiUsageSessions } from "@deskfleet/client/ai-usage"
+import type { RegisterSuperAgentMachineSessionInput, SuperAgentConfig, SuperAgentConfigUpdate, SuperAgentSession, SuperAgentUsage } from "@deskfleet/client/super-agent"
+import type { SiteUsagePeriod, SiteUsageTrends } from "@deskfleet/client/site-usage"
+import type { CentralApi, CentralEvent, LocalEnrollment, Machine, SiteSettings, TurnSettings, CloudflareTurnSettings, CloudflareTurnSettingsUpdate, Team, TeamMember, TeamTurnAvailability, TeamTurnSettingsUpdate } from "@deskfleet/client/central"
 
 export function billingFixture(usage = { relayedBytes: "0", activeSessionCount: 0, memberCount: 1 }): TeamBilling {
-  return { plan: "selfHosted", limits: { maxActiveSessions: null, maxTurnsPerSession: null, maxMembers: null, turnBytes: null }, usage, period: null, nextResetAt: null, enterpriseOverride: false, subscription: null, paymentsAvailable: false, canManageBilling: false, enterpriseContactEmail: null }
+  return { plan: "selfHosted", limits: quotaFixture.selfHosted, planCatalog: planCatalogFixture(), usage, period: null, nextResetAt: null, enterpriseOverride: false, subscription: null, paymentsAvailable: false, canManageBilling: false, enterpriseContactEmail: null }
 }
 
 export function aiUsageFixture(query: AiUsageQuery = { period: "30d", timeZone: "UTC" }): TeamAiUsage {
@@ -40,6 +44,8 @@ export function machineFixture(id: string, teamId: string, name: string, online 
 export function fakeCentral(options: FakeCentralOptions = {}) {
   const listeners = new Set<(event: CentralEvent) => void>()
   const state = {
+    planQuotas: adminPlanQuotasFixture(),
+    creditRates: { ...creditRatesFixture },
     signedIn: options.signedIn ?? true,
     siteAdmin: options.siteAdmin ?? false,
     site: { siteName: "DeskFleet", announcement: "", allowTeamCreation: true, telemetryEnabled: false, termsOfServiceUrl: "", privacyTermsUrl: "", ...options.site },
@@ -53,6 +59,7 @@ export function fakeCentral(options: FakeCentralOptions = {}) {
       { userId: "user-2", name: "Bob", email: "bob@example.test", role: "member" as const },
     ],
     enrollment: options.enrollment,
+    superAgentConfig: { mode: "hosted", hostedConfigured: true, canConfigure: true, byoa: null } as SuperAgentConfig,
   }
   const status = () => ({ serverUrl: "https://fleet.example", siteAdmin: state.signedIn && state.siteAdmin, user: state.signedIn ? { id: "user-1", name: "Ada", email: "ada@example.test" } : undefined })
   const teamTurnSettings = () => ({ availability: state.teamTurn.availability, urls: [...state.teamTurn.urls], secretConfigured: state.teamTurn.secret !== undefined })
@@ -63,6 +70,14 @@ export function fakeCentral(options: FakeCentralOptions = {}) {
     site: vi.fn(async () => ({ ...state.site })),
     updateTelemetryConsent: vi.fn(async () => {}),
     siteSettings: vi.fn(async () => ({ ...state.site })),
+    creditRates: vi.fn(async () => ({ ...state.creditRates })),
+    updateCreditRates: vi.fn(async (next: CreditRates) => { state.creditRates = { ...next }; return { ...next } }),
+    planQuotas: vi.fn(async () => state.planQuotas.map(row => ({ ...row }))),
+    updatePlanQuota: vi.fn(async (plan: HostedPlan, limits: PlanQuota): Promise<AdminPlanQuota> => {
+      const updated = { plan, ...limits }
+      state.planQuotas = state.planQuotas.map(row => row.plan === plan ? updated : row)
+      return updated
+    }),
     usageTrends: vi.fn(async (period: SiteUsagePeriod): Promise<SiteUsageTrends> => ({
       period, timeZone: "UTC", from: "2026-10-16T00:00:00Z", to: "2026-11-14T12:00:00Z", generatedAt: "2026-11-14T12:00:00Z",
       relayHistoryIncomplete: false, totals: { users: 2, teams: state.teams.length, machines: 0, sessions: 0 }, buckets: [],
@@ -95,8 +110,9 @@ export function fakeCentral(options: FakeCentralOptions = {}) {
     setManualGrant: vi.fn(async (_teamId: string, _plan: "free" | "go" | "pro" | "enterprise" | null, _expiresAt: number | null, _reason: string) => {}),
     deletionRequests: vi.fn(async (): Promise<AccountDeletionRequestPage> => ({ requests: [], nextCursor: null })),
     reviewDeletionRequest: vi.fn(async (_id: string, _approve: boolean, _note?: string) => {}),
-    registrationPolicy: vi.fn(async () => ({ registrationEnabled: true })),
+    registrationPolicy: vi.fn(async () => ({ registrationEnabled: true, captchaEnabled: false })),
     updateRegistration: vi.fn(async (_enabled: boolean) => {}),
+    updateCaptcha: vi.fn(async (_enabled: boolean) => {}),
     users: vi.fn(async (_query: string) => []),
     createUser: vi.fn(async (input: { name: string; email: string; password: string }) => ({ id: "user-created", name: input.name, email: input.email, disabled: false })),
     disableUser: vi.fn(async (_userId: string, _disabled: boolean) => {}),
@@ -121,6 +137,46 @@ export function fakeCentral(options: FakeCentralOptions = {}) {
       return { ...team }
     }),
     members: vi.fn(async (_teamId: string) => state.members.map(member => ({ ...member }))),
+    superAgentAvailability: vi.fn(async (_teamId: string) => ({ enabled: false })),
+    superAgentConfig: vi.fn(async (_teamId: string): Promise<SuperAgentConfig> => ({ ...state.superAgentConfig, byoa: state.superAgentConfig.byoa ? { ...state.superAgentConfig.byoa } : null })),
+    updateSuperAgentConfig: vi.fn(async (_teamId: string, update: SuperAgentConfigUpdate): Promise<SuperAgentConfig> => {
+      const nextByoa = update.byoa === undefined
+        ? state.superAgentConfig.byoa
+        : update.byoa === null
+          ? null
+          : {
+            machineId: update.byoa.machineId,
+            machineName: state.machines.find(m => m.id === update.byoa!.machineId)?.name ?? update.byoa.machineId,
+            machineOnline: state.machines.find(m => m.id === update.byoa!.machineId)?.online ?? true,
+            providerId: update.byoa.providerId,
+            providerName: update.byoa.providerName ?? null,
+            cwd: update.byoa.cwd ?? null,
+            yolo: !!update.byoa.yolo,
+          }
+      state.superAgentConfig = { ...state.superAgentConfig, mode: update.mode, byoa: nextByoa }
+      return { ...state.superAgentConfig, byoa: nextByoa ? { ...nextByoa } : null }
+    }),
+    superAgentSessions: vi.fn(async (_teamId: string): Promise<SuperAgentSession[]> => []),
+    registerSuperAgentMachineSession: vi.fn(async (_teamId: string, input: RegisterSuperAgentMachineSessionInput): Promise<SuperAgentSession> => ({
+      sessionId: input.sessionId,
+      title: input.title ?? null,
+      lastActiveAt: input.lastActiveAt ?? Date.now(),
+      engine: "byoa",
+      machineId: input.machineId,
+      machineName: state.machines.find(m => m.id === input.machineId)?.name ?? input.machineId,
+      providerId: input.providerId,
+      providerName: input.providerName ?? null,
+    })),
+    superAgentUsage: vi.fn(async (_teamId: string): Promise<SuperAgentUsage> => ({
+      runtimeConfigured: true, admitted: true, usedCredits: "0", includedCredits: null, usedTokens: 0, includedTokens: null, plan: "selfHosted",
+      start: "2026-11-01T00:00:00Z", end: "2026-12-01T00:00:00Z",
+    })),
+    createSuperAgentSession: vi.fn<CentralApi["createSuperAgentSession"]>(async (_teamId, operationId, message) => ({
+      sessionId: `wrun_${operationId}`, ...(message === undefined ? {} : { deliveryId: `delivery_${operationId}` }),
+    })),
+    sendSuperAgentMessage: vi.fn<CentralApi["sendSuperAgentMessage"]>(async (_teamId, sessionId, operationId) => ({ sessionId, deliveryId: `delivery_${operationId}` })),
+    cancelSuperAgentTurn: vi.fn<CentralApi["cancelSuperAgentTurn"]>(async () => {}),
+    superAgentHistory: vi.fn<CentralApi["superAgentHistory"]>(async (_teamId, _sessionId, startIndex) => ({ messages: [], nextIndex: startIndex })),
     teamUsage: vi.fn(async (_teamId: string) => ({ relayedBytes: "0", activeSessionCount: 0, memberCount: state.members.length })),
     teamTurnSettings: vi.fn(async (_teamId: string) => teamTurnSettings()),
     updateTeamTurnSettings: vi.fn(async (_teamId: string, settings: TeamTurnSettingsUpdate) => {

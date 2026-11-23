@@ -200,14 +200,33 @@ requires hardware acceleration and `x264` requires the optional runtime.
 ### Windows locked-desktop access
 
 The Windows welcome page and Settings → Permissions → **Remote control while
-locked** install the optional `DeskFleetDesktop` Windows service after explicit
-administrator approval. Welcome checks service status silently and uses the same
-installation controller as Permissions. Users can skip the step or retry after
-canceling approval; completed setup is not repeated. The NSIS app
-remains a per-user installation. The service and its desktop workers run from
-`Program Files/DeskFleet Desktop Service/deskfleet-desktop-service.exe`, with
+locked** install the optional `DeskFleetDesktop` Windows service and its
+on-demand `DeskFleetMaintenance` companion service after explicit administrator
+approval. Welcome checks service status silently and uses the same installation
+controller as Permissions. Users can skip the step or retry after canceling
+approval; completed setup is not repeated. The NSIS app remains a per-user
+installation. Both services run from `Program Files/DeskFleet Desktop Service/`
+(`deskfleet-desktop-service.exe` and `deskfleet-maintenance-service.exe`), with
 write access restricted to administrators and SYSTEM. No additional display or
 input driver is installed.
+
+NSIS application updates never prompt for UAC or block on service maintenance so
+remote desktop users do not lose access during an unattended upgrade. Instead,
+`DeskFleetMaintenance` stays stopped (`SERVICE_DEMAND_START`) with its SCM DACL
+permitting interactive users only `SERVICE_QUERY_STATUS | SERVICE_START`. On
+startup (or from Settings), the updated app streams a newer bundled
+`deskfleet-desktop-service.exe` and its signed manifest over an authenticated
+local named pipe (`\\.\pipe\deskfleet-maintenance-service`) directly into the
+protected staging directory without passing any caller filesystem paths to
+`LocalSystem`. `DeskFleetMaintenance` verifies the SHA-256 digest, checks the
+Ed25519 signature against its compile-time trusted public keys
+(`DESKFLEET_WINDOWS_SERVICE_PUBLIC_KEYS`), enforces a monotonic SemVer floor
+against `desktop-service.installed.json` and its own version to prevent
+downgrades, atomically swaps and restarts `DeskFleetDesktop` with recovery
+rollback, and exits. Unsigned development builds and legacy installations that
+predate `DeskFleetMaintenance` never elevate automatically on startup; instead,
+Settings offers an online **Update** action that runs while DeskFleet remains
+connected so remote users can approve UAC directly.
 
 When installed, display discovery, codec probing, capture/encoding, and input use
 the service. A missing service preserves the user-process backend. A stopped or
@@ -303,8 +322,11 @@ while checking permissions.
 Linux supports the current user's logged-in, unlocked Wayland desktop through
 RemoteDesktop portal v2, ScreenCast, PipeWire, and EIS. The portal backend must
 support keyboard and pointer access and monitor capture; a ScreenCast-only
-backend is insufficient. GNOME and KDE provide these interfaces. Login-screen
-access, remote unlock, clipboard, and system audio are outside this backend.
+backend is insufficient. GNOME and KDE provide these interfaces. When the portal
+implements `org.freedesktop.portal.Clipboard`, the session requests clipboard
+access before `RemoteDesktop.Start` so plain-text clipboard updates can flow in
+both directions while remote control is active. Login-screen
+access, remote unlock, and system audio are outside this backend.
 
 After discovery and local IPC are ready, both standalone and Electron-hosted
 daemons request screen and input access together. This runs asynchronously so a
@@ -435,7 +457,8 @@ system audio. Desktop streaming still requires one of the GStreamer encoders abo
 
 On Linux (such as `linux-arm64` inside Termux `proot-distro`), setting
 `DESKFLEET_ANDROID_SCRCPY_SERVER` to an upstream `scrcpy-server` v2.4+/v3.x JAR
-routes display/codec discovery, hardware video streaming, and touch/key input
+routes display/codec discovery, hardware video streaming, touch/key input, and
+bidirectional plain-text clipboard synchronization
 through `com.genymobile.scrcpy.Server` in UID 2000 instead of Wayland or X11
 (`linuxDesktopBackend` stays `null`). Transport defaults to `adb`
 (`DESKFLEET_ANDROID_SERIAL` or `ANDROID_SERIAL`), or uses
@@ -590,7 +613,7 @@ is explicitly configured to use the same directory. A live daemon prevents a
 second process from replacing its record.
 The health endpoint remains read-only and does not expose signaling or capture.
 
-The local contract in `apps/daemon/src/control-protocol.ts` carries authentication,
+The local contract in `packages/protocol/src/control.ts` carries authentication,
 capability discovery, SDP offers/answers, trickle ICE, capture start, close, and
 session events. The daemon assigns native peer IDs internally; each socket can
 operate only on its own sessions. Disconnect releases those peers and capture
@@ -663,8 +686,8 @@ H.264 constrained baseline,
 and optional mouse/keyboard control;
 it does not negotiate system audio. Electron's embedded launch page omits its
 floating controls; display and control settings belong to the native window.
-Android/iOS retain display and control selection on their explicit launch page
-because their native surface does not yet expose those settings. Browser-only
+Android/iOS expose display and control selection in their native floating
+controls as well as their explicit launch page. Browser-only
 codec, audio, and reverse-scroll options remain hidden for native launch paths.
 
 The toolbar follows the embedded desktop viewer's layout, color tokens, and
@@ -673,10 +696,27 @@ locale and theme when opening the window. The title combines the machine name,
 localized remote desktop label, and DeskFleet name. The compiled viewer embeds
 the DeskFleet icon for X11 windows, Windows title bars/task switching, and the
 macOS Dock; Wayland uses the installed DeskFleet desktop entry through its app ID.
-The toolbar shows connection and
-codec status, can be dragged within the window, enters or leaves full screen,
-pauses or resumes remote input, and disconnects. Settings select a display and
-enable or disable remote control. Display changes replace the receiving peer
+The toolbar holds only a drag grip, three dropdown triggers, and (on desktop)
+full screen; everything else lives in the dropdowns, and at most one is open:
+
+- **Control** owns input. Its trigger shows the input mode (active, paused, or
+  view only). The panel pauses or resumes sending input, offers **Allow control**
+  in a view-only session, and groups pointer options, keyboards, one-press
+  shortcut chips for the remote platform, Ctrl+Alt+Del, and clipboard sharing.
+  On phones and tablets it also selects Direct or Trackpad touch, drag lock, and
+  pinch zoom.
+- **Config** owns the session: display selection, the remote-control
+  permission, full screen, reconnect, and disconnect.
+- **Monitor** owns stream health. Its trigger shows a quality dot and frame rate;
+  the panel shows received bitrate with a 30-second history, frame rate, packet
+  loss, jitter, resolution, codec, lost packets, skipped frames, and keyframe
+  requests. The receive loop measures these from RTP packets and decoder totals
+  once per second. Quality is *Poor* at ≥5% loss or ≥60 ms jitter, *Fair* at
+  ≥1% or ≥25 ms, and *Good* otherwise. Live statistics and zoom re-render only
+  the values that show them, so an open display menu survives each sample.
+
+A shortcut chip sends its whole chord at once: it releases held input, presses
+each code in order, and releases them in reverse. Display changes replace the receiving peer
 while keeping the window open; an incompatible display leaves the current
 stream running and shows a settings error. Control-setting changes configure
 the current peer, while pause only gates local input.
@@ -714,8 +754,13 @@ that width, making newly available controls unfold across many frames. The
 toolbar now reaches its full width immediately while retaining layout coordinates
 for tooltip anchors.
 
-NSH/GPUI is the sole desktop window implementation. Android continues using
-its existing native surface implementation.
+The pure-Rust `nsh_controls` component tree and `nsh_keyboard` panel are shared by
+desktop, Android, and iOS. `nsh_toolbar` mounts them in GPUI; `nsh_android` and
+`ios_controls` mount them in NSH's native Android and UIKit backends. Each view
+owns its state subscription and action callback. Mobile hosts supply safe-area
+and keyboard-adjusted bounds, route controls locally, and retain their existing
+video surfaces and system IME editors. NSH does not own the video pipeline or
+the receiving peer. These native viewers do not enable NSH's JavaScript runtime.
 
 Electron's main process owns Team authorization, capability discovery, peer
 grants, signaling, and remote capture startup. It exchanges only control,
@@ -786,7 +831,7 @@ capture, while sustained loss releases the peer and grant and leaves the native
 window available to reconnect.
 
 The window-to-session input queue holds at most 256 events and coalesces only
-adjacent pointer moves, preserving key/button/wheel ordering. On overflow, it
+adjacent pointer moves or clipboard updates, preserving key/button/wheel ordering. On overflow, it
 discards pending input and the overflowing action, then queues `ReleaseAll`
 without closing the video. Focus-loss release also clears pending presses.
 Any event already being sent precedes the reset on the ordered DataChannel;
@@ -890,8 +935,11 @@ plugins on the receiving machine.
 Linux builds of the NSH/GPUI backend additionally need the development libraries
 for Fontconfig, FreeType, XKB/XKB-X11, XCB, and Wayland. Runtime GPU rendering
 requires a working graphics driver and the corresponding platform libraries.
-The NSH 0.4.0 backend and GPUI Fast 0.1.9 are pinned together to the versions in
-NSH's released GPUI workspace lockfile.
+NSH's core and platform backends are pinned to 0.6.0, with GPUI Fast 0.1.17 on
+desktop. The Android build stages the pinned crate's Java runtime sources and
+packages NSH and DeskFleet's JNI entry points together in `libnsh.so`. The iOS
+build links NSH into the viewer static library. Swift calls its C interface to
+mount the viewer and forward UIKit lifecycle events.
 
 On Windows, the viewer executable uses the GUI subsystem and its launcher does
 not set `windowsHide`: that flag also hides GPUI's window, even while the peer
@@ -1044,10 +1092,84 @@ positions. Buttons follow DOM numbering (left, middle, right, back, forward).
 `KeyboardEvent.code`, pressed state, and repeat. The remote keyboard layout
 determines characters. Physical keys that the target cannot map are ignored without
 releasing held input or disconnecting the stream. Malformed messages and OS injection
-failures still fail the connection. Clipboard, text/IME composition forwarding, and operating
-system shortcuts intercepted by the viewer's OS are outside this contract, apart
-from the explicit Windows `secureAttention` action described above.
+failures still fail the connection. `clipboard` carries plain-text UTF-8 payloads
+from 1 through 32,768 bytes (`MAX_CLIPBOARD_BYTES`) in both directions on
+`deskfleet-input` while control is active, deduplicating echoes so remote writes
+do not loop back. Both the embedded browser viewer and the native GPUI desktop
+window expose a **Clipboard sharing** setting (enabled by default) and sync on
+window focus and paste gestures. Android and iOS viewers expose the same setting
+for automatic `ClipboardManager` / `UIPasteboard` sync on focus and change events.
+The native floating toolbar's explicit clipboard action works independently of
+automatic sharing while input is enabled. Target clipboard integration uses Win32
+`CF_UNICODETEXT` on the bound input desktop (including across the Windows
+desktop service worker pipe on `RefreshInput`), macOS `NSPasteboard`, Wayland
+`org.freedesktop.portal.Clipboard`, X11 `CLIPBOARD` selection ownership and
+`XFIXES` notifications, and Android `scrcpy-server` control/device messages.
+Mobile system keyboards commit text after IME composition through ordered
+`clipboard` and paste-key events (Command+V on macOS targets, Control+V elsewhere).
+The **Terminal paste** option uses Control+Shift+V for terminal applications on
+non-macOS targets. This explicit text entry replaces the remote clipboard, independently of automatic
+clipboard sharing, and requires an application that accepts that paste shortcut.
+It also requires working target clipboard support; the existing clipboard message
+has no acknowledgement for reporting an unsuccessful paste to the mobile editor.
+Preedit/composition state is kept locally. Operating system shortcuts intercepted
+by the viewer's OS remain outside this contract, apart from the explicit Windows
+`secureAttention` action described above.
 `releaseAll` releases only controls held by this controller.
+
+### Phone and tablet controls
+
+Native Android/iOS viewers use the shared NSH floating toolbar, settings, and
+Hacker Keyboard, with touch-sized buttons and a compact layout. The controls
+provide display and control settings, pause/resume, clipboard,
+disconnect/reconnect, and close actions.
+Rust constructs the Android and iOS viewer hierarchies. Both hosts pass their
+available viewport to the shared Rust layout, which places the toolbar,
+dropdown, and Hacker Keyboard and determines which points belong to those
+controls. The toolbar stays within safe areas when the device rotates or the
+system keyboard opens. Collapsing the mobile toolbar closes its dropdown.
+
+Pinch zoom magnifies the presented video locally, up to 5× and the GPU's largest
+viewport. It changes neither the remote display nor the stream, so it also works
+in view-only sessions; **Pinch to zoom** in Control disables it and resets the
+view. The fingers' midpoint stays on the same video point, so moving two fingers
+while pinching pans. A zoomed edge never exposes letterboxing. Touch input maps
+through the zoomed rectangle, and a trackpad cursor that leaves the view pans it
+along. A new video size starts unzoomed. Hosts send touch kinds 15 (one pinch
+step: focal point in surface pixels and the incremental scale), 16 (pinch end),
+and 17 (reset). Once a gesture pinches, it no longer scrolls the remote. Desktop
+viewers do not zoom. The embedded browser/PWA viewer keeps its existing floating toolbar and
+adds touch controls on devices with a coarse pointer, including tablets with a mouse.
+
+Absolute mouse mode maps taps to the visible remote image, ignoring letterboxing;
+one-finger motion drags. Relative mode acts as a trackpad, preserving the cursor
+between gestures and moving it by finger displacement. Taps click at that cursor.
+Long press sends a secondary click and two-finger motion scrolls. Native viewers
+also expose a drag action for relative mode; Android and the embedded viewer support
+double-tap-and-hold dragging. In the iOS and Android native viewers, an external
+mouse or trackpad moves the remote cursor at the indicated point on the video
+in either touch mode. A button press on the video starts a remote drag or
+click. Secondary and middle buttons retain their identities, including when
+pressed together. Wheels and two-finger trackpad scrolling use the viewer's
+reverse-scroll setting. The overlay handles clicks that begin on its controls.
+
+Hardware keyboards work as soon as the viewer has focus and the remote host
+acknowledges input control. UIKit supplies HID positions and Android supplies
+evdev scan codes or platform key codes. Both forward key presses, releases,
+and modifiers through the same ordered channel as the pointer. A shortcut can
+recover a modifier already held when the viewer took focus. When the system
+editor is open, composing text and choosing an IME candidate stay local until
+commit. Switching modes, losing focus, pausing, and disconnecting release held
+input.
+
+**System keyboard** focuses a native IME editor (or a browser textarea).
+**Hacker Keyboard** opens a built-in special-key panel: Esc, Tab, navigation,
+delete, function keys, shortcut letters, and one-shot Ctrl/Alt/Shift/Meta modifiers.
+These modifiers are applied and released with the next key, so selecting a modifier
+never leaves it held remotely. Both keyboards obey the acknowledged remote-control
+state; opening a keyboard does not grant control. Native key/text commands and
+relative touch coordinates stay local to the viewer and reuse the existing desktop
+DataChannel contract.
 
 `deskfleet-input` owns validation, held state and platform injection behind one
 backend interface. Windows uses SendInput scan codes and physical virtual-desktop
@@ -1104,8 +1226,8 @@ try {
 ## Builds and checks
 
 The locked CMake 4.4 toolchain builds the bundled Opus source. Opus 0.4 uses
-`opusic-sys`'s bundled static library by default, so the SEA addon does not depend
-on a separately installed libopus. Windows NVENC loads the NVIDIA driver at runtime;
+`opusic-sys`'s bundled static library by default, so the native addon carries its
+own Opus library. Windows NVENC loads the NVIDIA driver at runtime;
 building its bundled header bindings requires LLVM/libclang and the Windows SDK.
 CI sets `LIBCLANG_PATH` to the hosted runner's LLVM installation. No NVIDIA SDK
 binary is redistributed.
