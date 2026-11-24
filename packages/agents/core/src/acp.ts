@@ -272,9 +272,10 @@ export async function connectAcpProcess(launch: AgentProcess, client: AgentClien
     }
   }).catch(error => console.error("ACP close callback failed", error))
 
+  const initTimeoutMs = process.arch === "riscv64" ? 90_000 : 30_000
   const timeout = setTimeout(() => {
     connection.close(new Error(`${launch.command} ACP initialization timed out`))
-  }, 30_000)
+  }, initTimeoutMs)
   timeout.unref()
   try {
     const initialization = await connection.agent.request(acp.methods.agent.initialize, {

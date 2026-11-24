@@ -4,6 +4,7 @@ import {
   chmodSync,
   closeSync,
   copyFileSync,
+  cpSync,
   createReadStream,
   createWriteStream,
   existsSync,
@@ -22,8 +23,11 @@ import { pipeline } from "node:stream/promises"
 import { createGzip } from "node:zlib"
 
 export const RISCV64_RUST_TARGET = "riscv64gc-unknown-linux-gnu"
-export const DEFAULT_GUEST_PARTITION_MIB = 1536
+export const DEFAULT_GUEST_PARTITION_MIB = 3072
 export const MBR_PARTITION_START_SECTOR = 2048 // 1 MiB alignment
+// Upstream Box64 commit including PR #4758 (.dynamic patching for main PIE + DT_PREINIT_ARRAY).
+export const BOX64_REPO = "https://github.com/ptitSeb/box64.git"
+export const BOX64_REV = "1d7564266933aa2b297a8e64bf7a656a819531cf"
 
 export function nodeRiscv64DownloadUrl(nodeVersion: string = process.version): string {
   const normalized = nodeVersion.startsWith("v") ? nodeVersion : `v${nodeVersion}`
@@ -38,6 +42,53 @@ export function buildDaemonWrapperScript(): string {
     "#!/bin/sh",
     'DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
     `exec "$DIR/node" ${RISCV64_NODE_V8_FLAGS} "$DIR/daemon.cjs" "$@"`,
+    "",
+  ].join("\n")
+}
+
+export function buildNodeWrapperScript(): string {
+  return [
+    "#!/bin/sh",
+    `exec /opt/deskfleet/node ${RISCV64_NODE_V8_FLAGS} "$@"`,
+    "",
+  ].join("\n")
+}
+
+export function buildNpmWrapperScript(): string {
+  return [
+    "#!/bin/sh",
+    'exec /usr/local/bin/node /opt/deskfleet/lib/node_modules/npm/bin/npm-cli.js "$@"',
+    "",
+  ].join("\n")
+}
+
+export function buildNpxWrapperScript(): string {
+  return [
+    "#!/bin/sh",
+    'exec /usr/local/bin/node /opt/deskfleet/lib/node_modules/npm/bin/npx-cli.js "$@"',
+    "",
+  ].join("\n")
+}
+
+export function buildBox64BinfmtConf(): string {
+  return [
+    "# /etc/binfmt.d/box64.conf",
+    ":box64:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\x00\\x00\\x00\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:/usr/local/bin/box64:",
+    "",
+  ].join("\n")
+}
+
+export function buildBox64RcFile(): string {
+  return [
+    "[*]",
+    "BOX64_NOBANNER=1",
+    "BOX64_DYNAREC_NOHOSTEXT=zicond,zbc,zicbop",
+    // Box64 calls GatherEnv() before per-binary ApplyEnvFileEntry(), so BOX64_ENV must live in [*].
+    "BOX64_ENV=GODEBUG=asyncpreemptoff=1",
+    "",
+    "[agy]",
+    "BOX64_DYNAREC_CALLRET=0",
+    "BOX64_DYNACACHE=1",
     "",
   ].join("\n")
 }
@@ -61,25 +112,28 @@ export function buildExecAgentScript(): string {
     "#!/bin/sh",
     "set -u",
     'DEV="/dev/ttyS1"',
-    'stty -F "$DEV" raw -echo -icrnl -onlcr 115200 2>/dev/null || true',
-    'exec 3<>"$DEV"',
-    'printf \'\\n\' >&3',
-    "while IFS=' ' read -r req_id req_len <&3; do",
-    '  [ -z "$req_id" ] && continue',
-    '  case "$req_len" in',
-    "    ''|*[!0-9]*) continue ;;",
-    "  esac",
-    '  cmd_file="/tmp/df-cmd-${req_id}.sh"',
-    '  out_file="/tmp/df-out-${req_id}.txt"',
-    '  dd bs=1 count="$req_len" of="$cmd_file" <&3 2>/dev/null',
-    "  set +e",
-    '  sh "$cmd_file" >"$out_file" 2>&1',
-    "  rc=$?",
-    "  set -e",
-    '  out_len=$(wc -c <"$out_file" | tr -d \' \')',
-    '  printf \'\\n%s %s %s\\n\' "$req_id" "$rc" "$out_len" >&3',
-    '  cat "$out_file" >&3',
-    '  rm -f "$cmd_file" "$out_file"',
+    "while true; do",
+    '  stty -F "$DEV" raw -echo -icrnl -onlcr clocal -hupcl 115200 2>/dev/null || true',
+    '  if exec 3<>"$DEV"; then',
+    "    printf '\\n' >&3 2>/dev/null || true",
+    "    while IFS=' ' read -r req_id req_len <&3; do",
+    '      [ -z "$req_id" ] && continue',
+    '      case "$req_len" in',
+    "        ''|*[!0-9]*) continue ;;",
+    "      esac",
+    '      cmd_file="/tmp/df-cmd-${req_id}.sh"',
+    '      out_file="/tmp/df-out-${req_id}.txt"',
+    '      dd bs=1 count="$req_len" of="$cmd_file" <&3 2>/dev/null || true',
+    '      sh "$cmd_file" >"$out_file" 2>&1',
+    "      rc=$?",
+    '      out_len=$(wc -c <"$out_file" | tr -d \' \')',
+    '      printf \'\\n%s %s %s\\n\' "$req_id" "$rc" "$out_len" >&3 2>/dev/null || break',
+    '      cat "$out_file" >&3 2>/dev/null || break',
+    '      rm -f "$cmd_file" "$out_file"',
+    "    done",
+    "    exec 3>&- 2>/dev/null || true",
+    "  fi",
+    "  sleep 0.2",
     "done",
     "",
   ].join("\n")
@@ -93,6 +147,7 @@ export function buildExecAgentSystemdUnit(): string {
     "",
     "[Service]",
     "ExecStart=/usr/local/bin/deskfleet-exec-agent.sh",
+    "KillMode=process",
     "Restart=always",
     "RestartSec=1",
     "",
@@ -104,6 +159,30 @@ export function buildExecAgentSystemdUnit(): string {
 
 export function buildGuestRootfsDockerfile(version: string): string {
   return [
+    "FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS box64-builder",
+    "ENV DEBIAN_FRONTEND=noninteractive",
+    "RUN apt-get update \\",
+    "  && apt-get install -y --no-install-recommends \\",
+    "    git ca-certificates cmake ninja-build python3 \\",
+    "    gcc-riscv64-linux-gnu g++-riscv64-linux-gnu binutils-riscv64-linux-gnu \\",
+    "  && git init /src/box64 \\",
+    `  && git -C /src/box64 fetch --depth 1 '${BOX64_REPO}' '${BOX64_REV}' \\`,
+    "  && git -C /src/box64 checkout --detach FETCH_HEAD \\",
+    "  && cmake -S /src/box64 -B /build/box64 -G Ninja \\",
+    "    -DCMAKE_SYSTEM_NAME=Linux \\",
+    "    -DCMAKE_SYSTEM_PROCESSOR=riscv64 \\",
+    "    -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \\",
+    "    -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++ \\",
+    "    -DCMAKE_BUILD_TYPE=Release \\",
+    "    -DRV64=ON \\",
+    "    -DRV64_DYNAREC=ON \\",
+    "    -DBOX32=OFF \\",
+    "    -DNOGIT=ON \\",
+    "  && cmake --build /build/box64 -j\"$(nproc)\" \\",
+    "  && mkdir -p /out \\",
+    "  && cp /build/box64/box64 /out/box64 \\",
+    "  && riscv64-linux-gnu-strip /out/box64",
+    "",
     "FROM --platform=linux/riscv64 ubuntu:24.04 AS rootfs",
     "ENV DEBIAN_FRONTEND=noninteractive",
     "RUN apt-get update \\",
@@ -117,18 +196,25 @@ export function buildGuestRootfsDockerfile(version: string): string {
     "  && ln -sf \"$(ls /boot/initrd.img-* | sort -V | tail -n 1)\" /boot/initrd.img \\",
     "  && apt-get clean \\",
     "  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*",
+    "COPY --from=box64-builder /out/box64 /usr/local/bin/box64",
     "COPY daemon/ /opt/deskfleet/",
     "COPY extlinux.conf /boot/extlinux/extlinux.conf",
+    "COPY box64.conf /etc/binfmt.d/box64.conf",
+    "COPY box64.box64rc /etc/box64.box64rc",
+    "COPY usr-local-node /usr/local/bin/node",
+    "COPY usr-local-npm /usr/local/bin/npm",
+    "COPY usr-local-npx /usr/local/bin/npx",
     "COPY deskfleet-exec-agent.sh /usr/local/bin/deskfleet-exec-agent.sh",
     "COPY deskfleet-exec-agent.service /etc/systemd/system/deskfleet-exec-agent.service",
-    "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace /etc/systemd/network \\",
-    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon /opt/deskfleet/node /usr/local/bin/deskfleet-exec-agent.sh \\",
-    "  && chmod 0644 /opt/deskfleet/daemon.cjs /opt/deskfleet/deskfleet.node /boot/extlinux/extlinux.conf /etc/systemd/system/deskfleet-exec-agent.service \\",
+    "RUN mkdir -p /opt/deskfleet /var/lib/deskfleet /root/workspace /root/.local/bin /root/.cache/box64 /etc/binfmt.d /etc/systemd/network /etc/systemd/system/sysinit.target.wants \\",
+    "  && chmod 0755 /opt/deskfleet/deskfleet-daemon /opt/deskfleet/node /usr/local/bin/deskfleet-exec-agent.sh /usr/local/bin/box64 /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx \\",
+    "  && chmod 0644 /opt/deskfleet/daemon.cjs /opt/deskfleet/deskfleet.node /boot/extlinux/extlinux.conf /etc/binfmt.d/box64.conf /etc/box64.box64rc /etc/systemd/system/deskfleet-exec-agent.service \\",
     `  && printf '%s' '${version.replace(/'/g, "'\\''")}' > /opt/deskfleet/.version \\`,
     "  && printf 'deskfleet-ios\\n' > /etc/hostname \\",
     "  && printf '/dev/nvme0n1p1 / ext4 defaults,noatime 0 1\\n' > /etc/fstab \\",
     "  && printf '[Match]\\nName=en* eth*\\n\\n[Network]\\nDHCP=yes\\n' > /etc/systemd/network/20-rtl8169.network \\",
     "  && mkdir -p /etc/systemd/system/multi-user.target.wants /etc/systemd/system/network-online.target.wants \\",
+    "  && ln -sf /usr/lib/systemd/system/systemd-binfmt.service /etc/systemd/system/sysinit.target.wants/systemd-binfmt.service \\",
     "  && ln -sf /etc/systemd/system/deskfleet-exec-agent.service /etc/systemd/system/multi-user.target.wants/deskfleet-exec-agent.service \\",
     "  && ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service \\",
     "  && ln -sf /usr/lib/systemd/system/systemd-resolved.service /etc/systemd/system/multi-user.target.wants/systemd-resolved.service",
@@ -277,6 +363,13 @@ export async function buildRiscv64DaemonBundle(
     const nodeBin = join(bundleDir, "node")
     copyFileSync(join(nodeExtract, "bin/node"), nodeBin)
     chmodSync(nodeBin, 0o755)
+
+    const npmSrc = join(nodeExtract, "lib/node_modules/npm")
+    if (existsSync(npmSrc)) {
+      const npmDest = join(bundleDir, "lib/node_modules/npm")
+      mkdirSync(join(bundleDir, "lib/node_modules"), { recursive: true })
+      cpSync(npmSrc, npmDest, { recursive: true })
+    }
   } finally {
     rmSync(workDir, { recursive: true, force: true })
   }
@@ -307,9 +400,18 @@ export async function buildRiscv64GuestDiskImage(options: {
     for (const file of ["deskfleet-daemon", "node", "daemon.cjs", "deskfleet.node"]) {
       copyFileSync(join(options.daemonBundleDir, file), join(contextDaemonDir, file))
     }
+    const libSrc = join(options.daemonBundleDir, "lib")
+    if (existsSync(libSrc)) {
+      cpSync(libSrc, join(contextDaemonDir, "lib"), { recursive: true })
+    }
     chmodSync(join(contextDaemonDir, "deskfleet-daemon"), 0o755)
     chmodSync(join(contextDaemonDir, "node"), 0o755)
     writeFileSync(join(contextDir, "extlinux.conf"), buildExtlinuxConf(), "utf8")
+    writeFileSync(join(contextDir, "box64.conf"), buildBox64BinfmtConf(), "utf8")
+    writeFileSync(join(contextDir, "box64.box64rc"), buildBox64RcFile(), "utf8")
+    writeFileSync(join(contextDir, "usr-local-node"), buildNodeWrapperScript(), "utf8")
+    writeFileSync(join(contextDir, "usr-local-npm"), buildNpmWrapperScript(), "utf8")
+    writeFileSync(join(contextDir, "usr-local-npx"), buildNpxWrapperScript(), "utf8")
     writeFileSync(join(contextDir, "deskfleet-exec-agent.sh"), buildExecAgentScript(), "utf8")
     writeFileSync(join(contextDir, "deskfleet-exec-agent.service"), buildExecAgentSystemdUnit(), "utf8")
     writeFileSync(join(contextDir, "Dockerfile"), buildGuestRootfsDockerfile(options.version), "utf8")

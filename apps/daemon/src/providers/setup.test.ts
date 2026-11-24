@@ -7,6 +7,7 @@ import { setImmediate as nextTurn } from "node:timers/promises"
 import { bundledDshRuntime, configureDshRuntime, electronDshHost, sourceDshRuntime } from "@deskfleet/dsh-runtime"
 import { createTerminal } from "@deskfleet/native"
 import type { AgentProviderInput } from "@deskfleet/protocol/provider"
+import { getAgentPlugin } from "../acp/registry.ts"
 import { interactiveProviderProcess, launchProviderCommand, runProbeCommand, type ProbeCommand, type ProbeCommandResult } from "./setup-process.ts"
 import { probeProvider, ProviderSetup, resolveProviderInstaller } from "./setup.ts"
 import type { TerminalRun } from "../terminals/terminals.ts"
@@ -17,7 +18,7 @@ const input = (template: AgentProviderInput["template"], overrides: Partial<Agen
 const result = (stdout: string, code = 0): ProbeCommandResult => ({ stdout, stderr: "", code })
 
 function fixture(options: {
-  files?: string[]; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv
+  files?: string[]; platform?: NodeJS.Platform; arch?: string; env?: NodeJS.ProcessEnv
   directory?: string
   answer?: ProbeCommand
   shellEnvironment?: () => Promise<Record<string, string>>
@@ -28,7 +29,7 @@ function fixture(options: {
     directory: options.directory,
     shellEnvironment: options.shellEnvironment,
     platform: options.platform ?? "linux" as NodeJS.Platform,
-    arch: "x64", env: options.env ?? { PATH: "/tools" }, home: options.platform === "win32" ? "C:\\Users\\someone" : "/home/someone", cwd: "/working",
+    arch: options.arch ?? "x64", env: options.env ?? { PATH: "/tools" }, home: options.platform === "win32" ? "C:\\Users\\someone" : "/home/someone", cwd: "/working",
     executable: async (path: string) => (options.files ?? []).includes(path),
     run: (async (command, args, env, cwd) => {
       calls.push({ command, args, env, cwd })
@@ -776,4 +777,29 @@ test("metadata runner closes stdin and preserves nonzero status for auth probes"
   const value = await runProbeCommand(process.execPath, ["-e", "process.stdin.on('end',()=>{process.stdout.write('not logged in');process.exitCode=1});process.stdin.resume()"], process.env, process.cwd())
   assert.equal(value.code, 1)
   assert.equal(value.stdout, "not logged in")
+})
+
+test("Antigravity on linux/riscv64 requires Box64, patches install.sh to amd64, sets GODEBUG, and tracks amd64 manifest", async () => {
+  const withoutBox64 = fixture({ platform: "linux", arch: "riscv64", files: ["/bin/bash"] })
+  const missingBox64Probe = await withoutBox64.setup.probe(input("antigravity"))
+  assert.equal(missingBox64Probe.installable, false)
+  assert.match(missingBox64Probe.installMessage!, /Box64 is required/u)
+  await assert.rejects(withoutBox64.setup.install(input("antigravity")), /Box64 is required/u)
+
+  const withBox64 = fixture({
+    platform: "linux",
+    arch: "riscv64",
+    files: ["/usr/local/bin/box64", "/bin/bash", "/home/someone/.local/bin/agy"],
+    answer: async () => result("Antigravity CLI 1.5.14"),
+  })
+  await withBox64.setup.install(input("antigravity"))
+  assert.equal(withBox64.runs[0]!.command, "/bin/bash")
+  assert.match(withBox64.runs[0]!.args!.at(-1)!, /GODEBUG="\$\{GODEBUG:-asyncpreemptoff=1\}"/u)
+  assert.match(withBox64.runs[0]!.args!.at(-1)!, /sed 's\/x86_64\|amd64\)\/x86_64\|amd64\|riscv64\)\/'/u)
+
+  await withBox64.setup.login(input("antigravity"))
+  assert.equal(withBox64.runs[1]!.env?.GODEBUG, "asyncpreemptoff=1")
+
+  const plugin = getAgentPlugin("antigravity")!
+  assert.match(plugin.update!.versionSource("linux", "riscv64").url, /manifests\/linux_amd64\.json$/u)
 })

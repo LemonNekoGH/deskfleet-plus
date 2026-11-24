@@ -15,10 +15,46 @@ internal enum RvvmDaemonCommands {
 
     static let daemonBinaryPath = "/opt/deskfleet/deskfleet-daemon"
     static let daemonPidFile = "/run/deskfleet-daemon.pid"
+    static let daemonEnvFile = "/run/deskfleet-daemon.env"
+    static let daemonServiceName = "deskfleet-daemon.service"
     static let daemonLogFile = "/var/log/deskfleet-daemon.log"
     static let daemonDiscoveryPath = "/root/.deskfleet/daemon.json"
     static let daemonReleaseAsset = "deskfleet-linux-riscv64.tar.gz"
     static let guestDiskArchiveAsset = "deskfleet-riscv64.img.gz"
+    static let box64BinfmtRegistration = ":box64:M::\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00:\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\x00\\x00\\x00\\x00\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff:/usr/local/bin/box64:"
+    // Box64 calls GatherEnv() before per-binary ApplyEnvFileEntry(), so BOX64_ENV must live in [*].
+    static let box64RcContent = [
+        "[*]",
+        "BOX64_NOBANNER=1",
+        "BOX64_DYNAREC_NOHOSTEXT=zicond,zbc,zicbop",
+        "BOX64_ENV=GODEBUG=asyncpreemptoff=1",
+        "",
+        "[agy]",
+        "BOX64_DYNAREC_CALLRET=0",
+        "BOX64_DYNACACHE=1",
+    ].joined(separator: "\n")
+
+    static func recommendedMemoryBytes(physicalMemoryBytes: UInt64) -> Int {
+        let giB: UInt64 = 1024 * 1024 * 1024
+        if physicalMemoryBytes >= 10 * giB {
+            return 1536 * 1024 * 1024
+        }
+        if physicalMemoryBytes >= 7 * giB {
+            return 1024 * 1024 * 1024
+        }
+        return 512 * 1024 * 1024
+    }
+
+    static func recommendedJitCacheBytes(physicalMemoryBytes: UInt64) -> Int {
+        let giB: UInt64 = 1024 * 1024 * 1024
+        if physicalMemoryBytes >= 10 * giB {
+            return 64 * 1024 * 1024
+        }
+        if physicalMemoryBytes >= 7 * giB {
+            return 48 * 1024 * 1024
+        }
+        return 32 * 1024 * 1024
+    }
 
     /// Disables V8 Sparkplug/Maglev/TurboFan/Wasm tier-up (which segfault under RVVM on riscv64)
     /// while keeping `WebAssembly` enabled so Node 24's undici `fetch`/`WebSocket` llhttp WASM works.
@@ -82,10 +118,26 @@ internal enum RvvmDaemonCommands {
         return "printf '%s' \(shellQuote(encoded)) | base64 -d | \(shellQuote(daemonBinaryPath)) enroll --server-url \(shellQuote(serverUrl))"
     }
 
+    static func settingsCommand(args: [String]) -> String {
+        let quotedArgs = args.map(shellQuote).joined(separator: " ")
+        let suffix = quotedArgs.isEmpty ? "" : " \(quotedArgs)"
+        return "if [ -x \(shellQuote(daemonBinaryPath)) ]; then HOME=/root \(shellQuote(daemonBinaryPath)) settings\(suffix); else exit 127; fi"
+    }
+
     static func nodeOptions(proxy: ProxyConfig? = nil) -> String {
         proxy?.hasAny == true
             ? "--dns-result-order=ipv4first --use-env-proxy"
             : "--dns-result-order=ipv4first"
+    }
+
+    private static func execAgentKillModeDropInLines() -> String {
+        [
+            "mkdir -p /run/systemd/system/deskfleet-exec-agent.service.d",
+            "cat <<'DESKFLEET_KILLMODE_EOF' >/run/systemd/system/deskfleet-exec-agent.service.d/killmode.conf",
+            "[Service]",
+            "KillMode=process",
+            "DESKFLEET_KILLMODE_EOF",
+        ].joined(separator: "\n")
     }
 
     static func configureGuestNetworkAndClockCommand(unixSeconds: Int64, dnsServers: [String]) -> String {
@@ -96,11 +148,28 @@ internal enum RvvmDaemonCommands {
             resolvedDns.append(trimmed)
         }
         let resolvLines = resolvedDns.map { "nameserver \($0)" }.joined(separator: "\n")
+        let killModeLines = execAgentKillModeDropInLines()
         return """
         date -u -s '@\(unixSeconds)' >/dev/null 2>&1 || true
         cat <<'EOF' >/etc/resolv.conf
         \(resolvLines)
         EOF
+        if [ -x /usr/local/bin/box64 ] && [ ! -e /proc/sys/fs/binfmt_misc/box64 ]; then
+          mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
+          if [ -w /proc/sys/fs/binfmt_misc/register ]; then
+            printf '%s\\n' \(shellQuote(box64BinfmtRegistration)) >/proc/sys/fs/binfmt_misc/register 2>/dev/null || true
+          fi
+        fi
+        if [ -x /usr/local/bin/box64 ]; then
+          cat <<'DESKFLEET_BOX64RC_EOF' >/etc/box64.box64rc
+        \(box64RcContent)
+        DESKFLEET_BOX64RC_EOF
+          chmod 0644 /etc/box64.box64rc 2>/dev/null || true
+        fi
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        \(killModeLines)
+          systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
         i=1
         while [ "$i" -le 15 ]; do
           if ip -4 route show default 2>/dev/null | grep -q default; then
@@ -119,28 +188,70 @@ internal enum RvvmDaemonCommands {
     }
 
     static func ensureDaemonRunningCommand(proxy: ProxyConfig? = nil) -> String {
+        let stripNewlines: (String) -> String = {
+            $0.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+        }
         var envLines = [
             "export HOME=/root",
+            "export PATH='/root/.local/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'",
+            "export GODEBUG='asyncpreemptoff=1'",
             "export NODE_OPTIONS=\(shellQuote(nodeOptions(proxy: proxy)))",
         ]
         if let proxy, proxy.hasAny {
             envLines.append("export NODE_USE_ENV_PROXY=1")
             if let httpProxy = proxy.httpProxy, !httpProxy.isEmpty {
-                envLines.append("export HTTP_PROXY=\(shellQuote(httpProxy))")
+                envLines.append("export HTTP_PROXY=\(shellQuote(stripNewlines(httpProxy)))")
             }
             if let httpsProxy = proxy.httpsProxy, !httpsProxy.isEmpty {
-                envLines.append("export HTTPS_PROXY=\(shellQuote(httpsProxy))")
+                envLines.append("export HTTPS_PROXY=\(shellQuote(stripNewlines(httpsProxy)))")
             }
             envLines.append("export NO_PROXY='localhost,127.0.0.1,::1'")
         }
+        let envBlock = envLines.joined(separator: "\n")
+        let killModeLines = execAgentKillModeDropInLines()
+        let qEnv = shellQuote(daemonEnvFile)
+        let qService = shellQuote(daemonServiceName)
+        let qPid = shellQuote(daemonPidFile)
+        let qDaemon = shellQuote(daemonBinaryPath)
+        let qLog = shellQuote(daemonLogFile)
         return """
         mkdir -p /run /var/log /opt/deskfleet /root/.deskfleet
-        \(envLines.joined(separator: "\n"))
-        if [ -f \(shellQuote(daemonPidFile)) ] && kill -0 "$(cat \(shellQuote(daemonPidFile)))" 2>/dev/null; then
+        cat <<'DESKFLEET_ENV_EOF' >\(qEnv)
+        \(envBlock)
+        DESKFLEET_ENV_EOF
+        chmod 0600 \(qEnv)
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        \(killModeLines)
+          cat <<'DESKFLEET_SERVICE_EOF' >/run/systemd/system/\(daemonServiceName)
+        [Unit]
+        Description=DeskFleet Machine Daemon
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        WorkingDirectory=/root
+        ExecStart=/bin/sh -c '. \(daemonEnvFile); echo $$ >\(daemonPidFile); exec \(daemonBinaryPath)'
+        StandardOutput=append:\(daemonLogFile)
+        StandardError=append:\(daemonLogFile)
+        Restart=always
+        RestartSec=2
+
+        [Install]
+        WantedBy=multi-user.target
+        DESKFLEET_SERVICE_EOF
+          systemctl daemon-reload >/dev/null 2>&1 || true
+          if systemctl is-active --quiet \(qService) || { [ -f \(qPid) ] && kill -0 "$(cat \(qPid) 2>/dev/null)" 2>/dev/null; }; then
+            exit 0
+          fi
+          systemctl start \(qService)
           exit 0
         fi
-        nohup \(shellQuote(daemonBinaryPath)) </dev/null >>\(shellQuote(daemonLogFile)) 2>&1 3>&- &
-        echo $! >\(shellQuote(daemonPidFile))
+        . \(qEnv)
+        if [ -f \(qPid) ] && kill -0 "$(cat \(qPid) 2>/dev/null)" 2>/dev/null; then
+          exit 0
+        fi
+        nohup \(qDaemon) </dev/null >>\(qLog) 2>&1 3>&- &
+        echo $! >\(qPid)
         """
     }
 
@@ -196,6 +307,7 @@ internal enum RvvmDaemonCommands {
 
     static func daemonProbeCommand(logOffset: UInt64) -> String {
         let qPid = shellQuote(daemonPidFile)
+        let qService = shellQuote(daemonServiceName)
         let qDiscovery = shellQuote(daemonDiscoveryPath)
         let qLog = shellQuote(daemonLogFile)
         return """
@@ -205,6 +317,9 @@ internal enum RvvmDaemonCommands {
           if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             alive=alive
           fi
+        fi
+        if [ "$alive" = "dead" ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet \(qService); then
+          alive=alive
         fi
         ready=waiting
         if [ -s \(qDiscovery) ]; then
@@ -281,6 +396,7 @@ internal enum RvvmDaemonCommands {
             ]
         let wrapperBody = daemonWrapperScript().trimmingCharacters(in: .newlines)
         let qDaemon = shellQuote(daemonBinaryPath)
+        let qService = shellQuote(daemonServiceName)
         let qPid = shellQuote(daemonPidFile)
         let qDiscovery = shellQuote(daemonDiscoveryPath)
         let lines = [
@@ -313,6 +429,9 @@ internal enum RvvmDaemonCommands {
             "  if ! cmp -s \"$tmp_wrapper\" \(qDaemon) 2>/dev/null; then",
             "    chmod 0755 \"$tmp_wrapper\"",
             "    mv \"$tmp_wrapper\" \(qDaemon)",
+            "    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet \(qService); then",
+            "      systemctl stop \(qService) >/dev/null 2>&1 || true",
+            "    fi",
             "    if [ -f \(qPid) ]; then",
             "      old_pid=$(cat \(qPid) 2>/dev/null || true)",
             "      if [ -n \"$old_pid\" ] && kill -0 \"$old_pid\" 2>/dev/null; then",
@@ -326,8 +445,8 @@ internal enum RvvmDaemonCommands {
             "          kill -9 \"$old_pid\" 2>/dev/null || true",
             "        fi",
             "      fi",
-            "      rm -f \(qPid) \(qDiscovery)",
             "    fi",
+            "    rm -f \(qPid) \(qDiscovery)",
             "    sync >/dev/null 2>&1 || true",
             "  else",
             "    rm -f \"$tmp_wrapper\"",
@@ -409,24 +528,28 @@ internal enum RvvmDaemonCommands {
               #!/bin/sh
               set -u
               DEV="/dev/ttyS1"
-              stty -F "$DEV" raw -echo -icrnl -onlcr 115200 2>/dev/null || true
-              exec 3<>"$DEV"
-              while IFS=' ' read -r req_id req_len <&3; do
-                [ -z "$req_id" ] && continue
-                case "$req_len" in
-                  ''|*[!0-9]*) continue ;;
-                esac
-                cmd_file="/tmp/df-cmd-${req_id}.sh"
-                out_file="/tmp/df-out-${req_id}.txt"
-                dd bs=1 count="$req_len" of="$cmd_file" <&3 2>/dev/null
-                set +e
-                sh "$cmd_file" >"$out_file" 2>&1
-                rc=$?
-                set -e
-                out_len=$(wc -c <"$out_file" | tr -d ' ')
-                printf '%s %s %s\n' "$req_id" "$rc" "$out_len" >&3
-                cat "$out_file" >&3
-                rm -f "$cmd_file" "$out_file"
+              while true; do
+                stty -F "$DEV" raw -echo -icrnl -onlcr clocal -hupcl 115200 2>/dev/null || true
+                if exec 3<>"$DEV"; then
+                  printf '\\n' >&3 2>/dev/null || true
+                  while IFS=' ' read -r req_id req_len <&3; do
+                    [ -z "$req_id" ] && continue
+                    case "$req_len" in
+                      ''|*[!0-9]*) continue ;;
+                    esac
+                    cmd_file="/tmp/df-cmd-${req_id}.sh"
+                    out_file="/tmp/df-out-${req_id}.txt"
+                    dd bs=1 count="$req_len" of="$cmd_file" <&3 2>/dev/null || true
+                    sh "$cmd_file" >"$out_file" 2>&1
+                    rc=$?
+                    out_len=$(wc -c <"$out_file" | tr -d ' ')
+                    printf '\\n%s %s %s\\n' "$req_id" "$rc" "$out_len" >&3 2>/dev/null || break
+                    cat "$out_file" >&3 2>/dev/null || break
+                    rm -f "$cmd_file" "$out_file"
+                  done
+                  exec 3>&- 2>/dev/null || true
+                fi
+                sleep 0.2
               done
           - path: /etc/systemd/system/deskfleet-exec-agent.service
             permissions: '0644'
@@ -436,6 +559,7 @@ internal enum RvvmDaemonCommands {
               After=local-fs.target network-online.target
               [Service]
               ExecStart=/usr/local/bin/deskfleet-exec-agent.sh
+              KillMode=process
               Restart=always
               RestartSec=1
               [Install]

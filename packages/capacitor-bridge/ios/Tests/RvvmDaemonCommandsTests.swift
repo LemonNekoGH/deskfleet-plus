@@ -85,15 +85,23 @@ final class RvvmDaemonCommandsTests: XCTestCase {
         XCTAssertTrue(cloudInit.hasPrefix("#cloud-config"))
         XCTAssertTrue(cloudInit.contains("/dev/ttyS1"))
         XCTAssertTrue(cloudInit.contains("deskfleet-exec-agent.service"))
+        XCTAssertTrue(cloudInit.contains("KillMode=process"))
+        XCTAssertTrue(cloudInit.contains("clocal -hupcl"))
     }
 
     func testEnsureDaemonRunningCommandClosesExecChannelAndCreatesDiscoveryDir() {
         let cmd = RvvmDaemonCommands.ensureDaemonRunningCommand()
         XCTAssertTrue(cmd.contains("/root/.deskfleet"))
         XCTAssertTrue(cmd.contains("export HOME=/root"))
+        XCTAssertTrue(cmd.contains("export PATH='/root/.local/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'"))
         XCTAssertTrue(cmd.contains("3>&-"))
         XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonPidFile))
         XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonLogFile))
+        XCTAssertTrue(cmd.contains("/run/systemd/system/deskfleet-daemon.service"))
+        XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonEnvFile))
+        XCTAssertTrue(cmd.contains("Restart=always"))
+        XCTAssertTrue(cmd.contains("deskfleet-exec-agent.service.d/killmode.conf"))
+        XCTAssertTrue(cmd.contains("KillMode=process"))
     }
 
     func testProvisionScriptSkipsRedownloadOnDevVersionWhileKeepingAssetUrl() {
@@ -112,6 +120,7 @@ final class RvvmDaemonCommandsTests: XCTestCase {
     func testDaemonProbeCommandAndOutputParsing() {
         let cmd = RvvmDaemonCommands.daemonProbeCommand(logOffset: 128)
         XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonDiscoveryPath))
+        XCTAssertTrue(cmd.contains("systemctl is-active --quiet 'deskfleet-daemon.service'"))
         XCTAssertTrue(cmd.contains("tail -c +$((128 + 1))"))
 
         let waiting = RvvmDaemonCommands.parseDaemonProbeOutput("STATE alive waiting 64\nbooting...\n")
@@ -148,12 +157,38 @@ final class RvvmDaemonCommandsTests: XCTestCase {
         )
         XCTAssertTrue(cmd.contains("date -u -s '@1763700000'"))
         XCTAssertTrue(cmd.contains("nameserver 198.18.0.2\nnameserver 1.1.1.1\nnameserver 10.0.0.1\nnameserver 8.8.8.8"))
+        XCTAssertTrue(cmd.contains("mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc"))
+        XCTAssertTrue(cmd.contains(RvvmDaemonCommands.box64BinfmtRegistration))
+        XCTAssertFalse(cmd.contains(":POC"))
+        XCTAssertTrue(cmd.contains("mkdir -p /run/systemd/system/deskfleet-exec-agent.service.d"))
+        XCTAssertTrue(cmd.contains("deskfleet-exec-agent.service.d/killmode.conf"))
+        XCTAssertTrue(cmd.contains("KillMode=process"))
+        XCTAssertTrue(cmd.contains("/etc/box64.box64rc"))
+        XCTAssertTrue(cmd.contains("BOX64_ENV=GODEBUG=asyncpreemptoff=1"))
+        let envRange = RvvmDaemonCommands.box64RcContent.range(of: "BOX64_ENV=GODEBUG=asyncpreemptoff=1")
+        let agyRange = RvvmDaemonCommands.box64RcContent.range(of: "[agy]")
+        XCTAssertNotNil(envRange)
+        XCTAssertNotNil(agyRange)
+        if let envRange, let agyRange {
+            XCTAssertLessThan(envRange.lowerBound, agyRange.lowerBound)
+        }
         XCTAssertTrue(cmd.contains("ip -4 route show default"))
         XCTAssertTrue(cmd.contains("networkctl reconfigure enp0s1"))
     }
 
+    func testRecommendedMemoryAndJitCacheScaleWithPhysicalMemory() {
+        let giB: UInt64 = 1024 * 1024 * 1024
+        XCTAssertEqual(RvvmDaemonCommands.recommendedMemoryBytes(physicalMemoryBytes: 4 * giB), 512 * 1024 * 1024)
+        XCTAssertEqual(RvvmDaemonCommands.recommendedJitCacheBytes(physicalMemoryBytes: 4 * giB), 32 * 1024 * 1024)
+        XCTAssertEqual(RvvmDaemonCommands.recommendedMemoryBytes(physicalMemoryBytes: 8 * giB), 1024 * 1024 * 1024)
+        XCTAssertEqual(RvvmDaemonCommands.recommendedJitCacheBytes(physicalMemoryBytes: 8 * giB), 48 * 1024 * 1024)
+        XCTAssertEqual(RvvmDaemonCommands.recommendedMemoryBytes(physicalMemoryBytes: 12 * giB), 1536 * 1024 * 1024)
+        XCTAssertEqual(RvvmDaemonCommands.recommendedJitCacheBytes(physicalMemoryBytes: 12 * giB), 64 * 1024 * 1024)
+    }
+
     func testEnsureDaemonRunningCommandConfiguresIpv4FirstAndOptionalProxy() {
         let plain = RvvmDaemonCommands.ensureDaemonRunningCommand()
+        XCTAssertTrue(plain.contains("export GODEBUG='asyncpreemptoff=1'"))
         XCTAssertTrue(plain.contains("NODE_OPTIONS='--dns-result-order=ipv4first'"))
         XCTAssertFalse(plain.contains("--jitless"))
         XCTAssertFalse(plain.contains("--no-sparkplug"))
@@ -192,6 +227,21 @@ final class RvvmDaemonCommandsTests: XCTestCase {
         XCTAssertEqual(
             RvvmDaemonCommands.extractProbeError(from: "ip addr\nPROBE_ERR fetch failed ENOTFOUND getaddrinfo getaddrinfo ENOTFOUND deskfleet.yetanother.ai\n"),
             "fetch failed ENOTFOUND getaddrinfo getaddrinfo ENOTFOUND deskfleet.yetanother.ai"
+        )
+    }
+
+    func testSettingsCommandQuotesArgumentsAndSetsHome() {
+        XCTAssertEqual(
+            RvvmDaemonCommands.settingsCommand(args: ["get"]),
+            "if [ -x '/opt/deskfleet/deskfleet-daemon' ]; then HOME=/root '/opt/deskfleet/deskfleet-daemon' settings 'get'; else exit 127; fi"
+        )
+        XCTAssertEqual(
+            RvvmDaemonCommands.settingsCommand(args: ["set", "remoteAgents.allowRead", "true"]),
+            "if [ -x '/opt/deskfleet/deskfleet-daemon' ]; then HOME=/root '/opt/deskfleet/deskfleet-daemon' settings 'set' 'remoteAgents.allowRead' 'true'; else exit 127; fi"
+        )
+        XCTAssertEqual(
+            RvvmDaemonCommands.settingsCommand(args: ["set", "worktrees.root", "/tmp/a'b"]),
+            "if [ -x '/opt/deskfleet/deskfleet-daemon' ]; then HOME=/root '/opt/deskfleet/deskfleet-daemon' settings 'set' 'worktrees.root' '/tmp/a'\"'\"'b'; else exit 127; fi"
         )
     }
 }

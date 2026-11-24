@@ -72,7 +72,8 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "localDaemonStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "localDaemonPrepareEnrollment", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "localDaemonEnroll", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "localDaemonEnroll", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonSettings", returnType: CAPPluginReturnPromise)
     ]
 
     nonisolated(unsafe) internal static weak var activePlugin: DeskFleetBridge?
@@ -187,6 +188,32 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
                 }
                 guard let coerced = JSTypes.coerceDictionaryToJSObject(enrolled) else {
                     call.reject("Invalid enroll payload")
+                    return
+                }
+                call.resolve(coerced)
+            } catch {
+                call.reject(error.localizedDescription)
+            }
+        }
+    }
+
+    @objc func localDaemonSettings(_ call: CAPPluginCall) {
+        let rawArgs = call.getArray("args") ?? []
+        var args: [String] = []
+        args.reserveCapacity(rawArgs.count)
+        for item in rawArgs {
+            guard let text = item as? String else {
+                call.reject("Invalid settings argument")
+                return
+            }
+            args.append(text)
+        }
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let settings = try manager.settings(args: args)
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(settings) else {
+                    call.reject("Invalid local daemon settings payload")
                     return
                 }
                 call.resolve(coerced)

@@ -9,9 +9,7 @@ import UIKit
 internal final class RvvmDaemonManager {
     private static let appGroupId = "group.moe.remon.deskfleet.plus"
     private static let defaultForkReleaseBase = "https://github.com/LemonNekoGH/deskfleet-plus/releases/download/ios-guest-riscv64"
-    private static let defaultMemoryBytes: Int = 512 * 1024 * 1024
     private static let defaultVcpuCount: Int = 2
-    private static let defaultJitCacheBytes: Int = 32 * 1024 * 1024
 
     private let versionName: String
     private let fallbackMachineName: String
@@ -137,6 +135,23 @@ internal final class RvvmDaemonManager {
         _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
         _ = try? execInGuest("sync >/dev/null 2>&1 || true", timeoutSeconds: 10)
         return enrolled
+    }
+
+    func settings(args: [String]) throws -> [String: Any] {
+        guard isVMRunning() else {
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 19,
+                userInfo: [NSLocalizedDescriptionKey: "Embedded Linux daemon is not running"]
+            )
+        }
+        let cmd = RvvmDaemonCommands.settingsCommand(args: args)
+        let output = try execInGuest(cmd, timeoutSeconds: 20)
+        let parsed = try RvvmDaemonCommands.extractJsonObject(from: output)
+        if args.first == "set" || args.first == "reset" {
+            _ = try? execInGuest("sync >/dev/null 2>&1 || true", timeoutSeconds: 10)
+        }
+        return parsed
     }
 
     // MARK: - VM lifecycle
@@ -275,6 +290,10 @@ internal final class RvvmDaemonManager {
 
         keepAlive.start()
         emitStep("Booting embedded RISC-V 64-bit Linux VM (librvvm + RVJIT)...")
+        let physicalMemory = ProcessInfo.processInfo.physicalMemory
+        let memoryBytes = RvvmDaemonCommands.recommendedMemoryBytes(physicalMemoryBytes: physicalMemory)
+        let jitCacheBytes = RvvmDaemonCommands.recommendedJitCacheBytes(physicalMemoryBytes: physicalMemory)
+        emitInfo("Guest RAM: \(memoryBytes / (1024 * 1024)) MiB, RVJIT cache: \(jitCacheBytes / (1024 * 1024)) MiB")
 
         let cmdline = RvvmDaemonCommands.guestBootCmdline()
         var errorBuffer = [CChar](repeating: 0, count: 512)
@@ -285,9 +304,9 @@ internal final class RvvmDaemonManager {
                         withOptionalCString(seedDiskURL?.path) { seedCStr in
                             withOptionalCString(kernelURL != nil ? cmdline : nil) { cmdlineCStr in
                                 var cfg = rvvm_host_config_t(
-                                    memory_bytes: Self.defaultMemoryBytes,
+                                    memory_bytes: memoryBytes,
                                     vcpu_count: Self.defaultVcpuCount,
-                                    jit_cache_bytes: Self.defaultJitCacheBytes,
+                                    jit_cache_bytes: jitCacheBytes,
                                     enable_jit: true,
                                     enable_network: true,
                                     firmware_path: fwCStr,

@@ -1,11 +1,27 @@
 import type { ForkSessionRequest, InitializeResponse, NewSessionRequest, PromptResponse, ResumeSessionRequest, SessionNotification, Usage } from "@agentclientprotocol/sdk/unstable"
 import {
-  clampQuota, connectAcpProcess, jsonVersionParser, launchProviderCommand, resolveBashScriptInstaller,
+  clampQuota, connectAcpProcess, findCommand, jsonVersionParser, launchProviderCommand, resolveBashScriptInstaller,
   resolvePowerShellScriptInstaller, runUsageJsonCommand, supportsAutoInstallPlatform,
   UNSUPPORTED_INSTALL_PLATFORM_MESSAGE,
   type AgentConnection, type AgentProvider, type AgentProviderPlugin, type AgentQuotaItem,
 } from "@deskfleet/agent-core"
 import { LEGACY_ANTIGRAVITY_BINARY, normalizeAntigravityBinaryPath } from "@deskfleet/protocol/agents/antigravity"
+
+function withAntigravityEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): Record<string, string> {
+  const base = Object.fromEntries(
+    Object.entries(env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  )
+  if (platform !== "linux" || arch !== "riscv64") return base
+  return {
+    ...base,
+    // Box64's signal trampoline corrupts Go registers/stack on SIGURG async preemption.
+    GODEBUG: base.GODEBUG ?? process.env.GODEBUG ?? "asyncpreemptoff=1",
+  }
+}
 
 export { LEGACY_ANTIGRAVITY_BINARY, normalizeAntigravityBinaryPath }
 
@@ -308,7 +324,7 @@ export const antigravityProvider: AgentProvider = {
     const args = geminiDir ? ["acp", "--gemini-dir", geminiDir] : ["acp"]
     const work = new AntigravityWork()
     const connection = await connectAcpProcess(
-      launchProviderCommand(config.binaryPath || "agy", args, config.env),
+      launchProviderCommand(config.binaryPath || "agy", args, withAntigravityEnv(config.env)),
       {
         ...client,
         async onUpdate(notification) {
@@ -320,7 +336,7 @@ export const antigravityProvider: AgentProvider = {
     return wrapAntigravityConnection(connection, client.signal, work)
   },
   async readUsage(config, signal) {
-    return parseAntigravityUsage(await runUsageJsonCommand(config.binaryPath || "agy", ["-p", "/usage", "--output-format", "json"], config.env, signal))
+    return parseAntigravityUsage(await runUsageJsonCommand(config.binaryPath || "agy", ["-p", "/usage", "--output-format", "json"], withAntigravityEnv(config.env), signal))
   },
 }
 
@@ -330,6 +346,8 @@ export const antigravityPlugin: AgentProviderPlugin<"antigravity"> = {
   provider: antigravityProvider,
   normalizeBinaryPath: normalizeAntigravityBinaryPath,
   setup: {
+    probeTimeoutMs: () => (process.arch === "riscv64" ? 120_000 : undefined),
+    identityCommandTimeoutMs: process.arch === "riscv64" ? 60_000 : undefined,
     searchDirectories(ctx) {
       if (ctx.platform !== "win32") return []
       const local = ctx.env.LOCALAPPDATA ?? ctx.path.join(ctx.home, "AppData", "Local")
@@ -337,6 +355,15 @@ export const antigravityPlugin: AgentProviderPlugin<"antigravity"> = {
     },
     identityPattern: /\bagy\b|Antigravity/iu,
     async resolveInstaller(ctx) {
+      if (ctx.platform === "linux" && ctx.arch === "riscv64") {
+        if (!await findCommand("box64", ctx, ["/usr/local/bin", "/usr/bin"])) {
+          return "Box64 is required to install and run Antigravity CLI on linux/riscv64."
+        }
+        return resolveBashScriptInstaller(
+          ctx,
+          "export GODEBUG=\"${GODEBUG:-asyncpreemptoff=1}\"; if [ -x \"$HOME/.local/bin/agy\" ]; then \"$HOME/.local/bin/agy\" update; else curl -fsSL 'https://antigravity.google/cli/install.sh' | sed 's/x86_64|amd64)/x86_64|amd64|riscv64)/' | bash; fi",
+        )
+      }
       if (!supportsAutoInstallPlatform(ctx)) return UNSUPPORTED_INSTALL_PLATFORM_MESSAGE
       if (ctx.platform === "win32") {
         return resolvePowerShellScriptInstaller(
@@ -352,12 +379,12 @@ export const antigravityPlugin: AgentProviderPlugin<"antigravity"> = {
     resolveLogin(binary, _input, _probeResult, ctx) {
       if (!binary) throw new Error("Install or select the provider executable before signing in.")
       const args = ["acp", ...(ctx.env.GEMINI_HOME ? ["--gemini-dir", ctx.env.GEMINI_HOME] : []), "--login"]
-      return launchProviderCommand(binary, args, ctx.env, ctx.platform)
+      return launchProviderCommand(binary, args, withAntigravityEnv(ctx.env, ctx.platform, ctx.arch), ctx.platform)
     },
   },
   update: {
     versionSource: (platform, arch) => ({
-      url: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform === "win32" ? "windows" : platform}_${arch === "x64" ? "amd64" : "arm64"}.json`,
+      url: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${platform === "win32" ? "windows" : platform}_${arch === "x64" || arch === "riscv64" ? "amd64" : "arm64"}.json`,
       parse: jsonVersionParser(),
     }),
   },
