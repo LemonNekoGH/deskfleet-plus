@@ -17,6 +17,12 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     private var vpnReachable = false
     private var isBusy = false
     private var isPairing = false
+    private var autoLaunchVpnRequested: Bool
+    private var didInitialProbe = false
+    private var hasAttemptedAutoVpnLaunch = false
+    private var hasAttemptedAutoActivation = false
+    private var awaitingVpnReturn = false
+    private var probeGeneration = 0
     private let jitStateLock = NSLock()
     private var activeJitToken: UUID?
     private var foregroundObserver: NSObjectProtocol?
@@ -25,12 +31,19 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     private let pairingStateLabel = UILabel()
     private let vpnStateLabel = UILabel()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)
+    private let openVpnButton = UIButton(type: .system)
     private let importButton = UIButton(type: .system)
     private let pairButton = UIButton(type: .system)
+    private let openDeveloperModeButton = UIButton(type: .system)
     private let activateButton = UIButton(type: .system)
 
-    init(pairingFileURL: URL, onComplete: @escaping (Result<Void, Error>) -> Void) {
+    init(
+        pairingFileURL: URL,
+        autoLaunchVpnOnAppear: Bool = false,
+        onComplete: @escaping (Result<Void, Error>) -> Void
+    ) {
         self.pairingFileURL = pairingFileURL
+        self.autoLaunchVpnRequested = autoLaunchVpnOnAppear
         self.onComplete = onComplete
         super.init(nibName: nil, bundle: nil)
     }
@@ -44,6 +57,58 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         if let foregroundObserver {
             NotificationCenter.default.removeObserver(foregroundObserver)
         }
+    }
+
+    static func probeLocalDevVpnOnce(
+        timeout: TimeInterval = 1.5,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let port = NWEndpoint.Port(rawValue: RvvmJitRouting.localDevVpnPort) else {
+            completion(false)
+            return
+        }
+        let queue = DispatchQueue(label: "moe.remon.deskfleet.plus.vpn-probe")
+        let connection = NWConnection(
+            host: NWEndpoint.Host(RvvmJitRouting.localDevVpnHost),
+            port: port,
+            using: .tcp
+        )
+        let lock = NSLock()
+        var finished = false
+        let finishProbe: (Bool) -> Void = { reachable in
+            lock.lock()
+            let alreadyFinished = finished
+            finished = true
+            lock.unlock()
+            guard !alreadyFinished else { return }
+            connection.cancel()
+            completion(reachable)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                finishProbe(true)
+            case .failed, .cancelled:
+                finishProbe(false)
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + timeout) {
+            finishProbe(false)
+        }
+    }
+
+    static func probeLocalDevVpnSync(timeout: TimeInterval = 0.8) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result = false
+        probeLocalDevVpnOnce(timeout: timeout) { reachable in
+            result = reachable
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout + 0.3)
+        return result
     }
 
     override func viewDidLoad() {
@@ -63,7 +128,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         titleLabel.numberOfLines = 0
 
         let descriptionLabel = UILabel()
-        descriptionLabel.text = "DeskFleet runs an embedded RISC-V 64-bit Linux daemon using librvvm with RVJIT. Import your RemotePairing file and ensure LocalDevVPN is active on 10.7.0.1 to activate JIT."
+        descriptionLabel.text = "DeskFleet runs an embedded RISC-V 64-bit Linux daemon using librvvm with RVJIT. Import or pair your RemotePairing file and enable LocalDevVPN (or CalicoMeow) on 10.7.0.1 to activate JIT."
         descriptionLabel.font = .preferredFont(forTextStyle: .subheadline)
         descriptionLabel.textColor = .secondaryLabel
         descriptionLabel.numberOfLines = 0
@@ -78,6 +143,9 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         statusLabel.textColor = .secondaryLabel
         statusLabel.numberOfLines = 0
 
+        configureButton(openVpnButton, title: "Enable LocalDevVPN", style: .tinted)
+        openVpnButton.addTarget(self, action: #selector(openLocalDevVpnTapped), for: .touchUpInside)
+
         configureButton(importButton, title: "Import Pairing File (.plist)", style: .tinted)
         importButton.addTarget(self, action: #selector(importPairingTapped), for: .touchUpInside)
 
@@ -85,16 +153,28 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         pairButton.addTarget(self, action: #selector(onDevicePairTapped), for: .touchUpInside)
         pairButton.isHidden = !RvvmOnDevicePairing.isSupportedOnCurrentOS
 
+        let devModeTitle = RvvmOnDevicePairing.isSupportedOnCurrentOS
+            ? "Open Developer Mode (Wireless Pairing)"
+            : "Open Developer Mode Settings"
+        configureButton(openDeveloperModeButton, title: devModeTitle, style: .tinted)
+        openDeveloperModeButton.addTarget(self, action: #selector(openDeveloperModeSettingsTapped), for: .touchUpInside)
+
         configureButton(activateButton, title: "Activate Pure JIT", style: .filled)
         activateButton.addTarget(self, action: #selector(activateJitTapped), for: .touchUpInside)
+
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(scrollView)
 
         let stack = UIStackView(arrangedSubviews: [
             titleLabel,
             descriptionLabel,
             pairingStateLabel,
             vpnStateLabel,
+            openVpnButton,
             importButton,
             pairButton,
+            openDeveloperModeButton,
             activateButton,
             activityIndicator,
             statusLabel,
@@ -102,12 +182,18 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         stack.axis = .vertical
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
+        scrollView.addSubview(stack)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            stack.leadingAnchor.constraint(equalTo: view.layoutMarginsGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 20),
+            stack.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor, constant: -20),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -20),
         ])
 
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -115,12 +201,52 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.probeLocalDevVpn()
-            self?.refreshState()
+            self?.handleDidBecomeActive()
         }
 
         refreshState()
-        probeLocalDevVpn()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !didInitialProbe else { return }
+        didInitialProbe = true
+        if isJitReadyForColdStart {
+            finish(.success(()))
+            return
+        }
+        probeLocalDevVpn(
+            retriesRemaining: 0,
+            retryInterval: 0.35,
+            allowAutoLaunchVpn: autoLaunchVpnRequested,
+            isReturningFromVpn: false
+        )
+    }
+
+    private func handleDidBecomeActive() {
+        guard !completed else { return }
+        if isJitReadyForColdStart {
+            finish(.success(()))
+            return
+        }
+        refreshState()
+        if awaitingVpnReturn {
+            awaitingVpnReturn = false
+            statusLabel.text = "Returned from VPN app. Waiting for LocalDevVPN (10.7.0.1:62078)..."
+            probeLocalDevVpn(
+                retriesRemaining: 6,
+                retryInterval: 0.4,
+                allowAutoLaunchVpn: false,
+                isReturningFromVpn: true
+            )
+        } else {
+            probeLocalDevVpn(
+                retriesRemaining: 2,
+                retryInterval: 0.35,
+                allowAutoLaunchVpn: autoLaunchVpnRequested,
+                isReturningFromVpn: false
+            )
+        }
     }
 
     private func configureButton(_ button: UIButton, title: String, style: ButtonStyle) {
@@ -142,8 +268,17 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
         case tinted
     }
 
+    private var hasPairingFile: Bool {
+        FileManager.default.fileExists(atPath: pairingFileURL.path)
+    }
+
+    private func canOpenLocalDevVpn() -> Bool {
+        let probeURL = RvvmJitRouting.localDevVpnEnableURL(callbackScheme: RvvmJitRouting.bundleCallbackScheme())
+        return UIApplication.shared.canOpenURL(probeURL)
+    }
+
     private func refreshState() {
-        let hasPairing = FileManager.default.fileExists(atPath: pairingFileURL.path)
+        let hasPairing = hasPairingFile
         pairingStateLabel.text = hasPairing
             ? "Pairing file: Ready (\(pairingFileURL.lastPathComponent))"
             : "Pairing file: Not imported yet"
@@ -154,35 +289,138 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
             : "LocalDevVPN (10.7.0.1:62078): Not detected (required on device)"
         vpnStateLabel.textColor = vpnReachable ? .systemGreen : .secondaryLabel
 
+        openVpnButton.isEnabled = !isBusy
+        openDeveloperModeButton.isEnabled = true
         activateButton.isEnabled = !isBusy && hasPairing
     }
 
-    private func probeLocalDevVpn() {
-        let queue = DispatchQueue(label: "moe.remon.deskfleet.plus.vpn-probe")
-        let connection = NWConnection(host: "10.7.0.1", port: 62078, using: .tcp)
-        var finished = false
-        let finishProbe: (Bool) -> Void = { [weak self] reachable in
-            guard !finished else { return }
-            finished = true
-            connection.cancel()
+    private func probeLocalDevVpn(
+        retriesRemaining: Int,
+        retryInterval: TimeInterval,
+        allowAutoLaunchVpn: Bool,
+        isReturningFromVpn: Bool
+    ) {
+        probeGeneration += 1
+        let generation = probeGeneration
+        runProbeAttempt(
+            generation: generation,
+            retriesRemaining: retriesRemaining,
+            retryInterval: retryInterval,
+            allowAutoLaunchVpn: allowAutoLaunchVpn,
+            isReturningFromVpn: isReturningFromVpn
+        )
+    }
+
+    private func runProbeAttempt(
+        generation: Int,
+        retriesRemaining: Int,
+        retryInterval: TimeInterval,
+        allowAutoLaunchVpn: Bool,
+        isReturningFromVpn: Bool
+    ) {
+        Self.probeLocalDevVpnOnce(timeout: 1.2) { [weak self] reachable in
             DispatchQueue.main.async {
-                self?.vpnReachable = reachable
-                self?.refreshState()
+                guard let self, !self.completed, self.probeGeneration == generation else { return }
+                if reachable {
+                    self.vpnReachable = true
+                    self.awaitingVpnReturn = false
+                    self.refreshState()
+                    self.triggerAutoActivationIfReady()
+                    return
+                }
+                if retriesRemaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + retryInterval) { [weak self] in
+                        guard let self, !self.completed, self.probeGeneration == generation else { return }
+                        self.runProbeAttempt(
+                            generation: generation,
+                            retriesRemaining: retriesRemaining - 1,
+                            retryInterval: retryInterval,
+                            allowAutoLaunchVpn: allowAutoLaunchVpn,
+                            isReturningFromVpn: isReturningFromVpn
+                        )
+                    }
+                    return
+                }
+
+                self.vpnReachable = false
+                self.refreshState()
+                if isReturningFromVpn {
+                    self.statusLabel.text = "LocalDevVPN (10.7.0.1:62078) is still unreachable. Verify LocalDevVPN or CalicoMeow is enabled, then try again."
+                    return
+                }
+                if RvvmJitRouting.shouldAutoLaunchLocalDevVpn(
+                    autoTriggerRequested: allowAutoLaunchVpn,
+                    hasPairingFile: self.hasPairingFile,
+                    vpnReachable: false,
+                    canOpenLocalDevVpn: self.canOpenLocalDevVpn(),
+                    isBusy: self.isBusy,
+                    isPairing: self.isPairing,
+                    hasAttemptedAutoLaunch: self.hasAttemptedAutoVpnLaunch
+                ) {
+                    self.hasAttemptedAutoVpnLaunch = true
+                    self.openLocalDevVpn(automatic: true)
+                }
             }
         }
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                finishProbe(true)
-            case .failed, .cancelled:
-                finishProbe(false)
-            default:
-                break
+    }
+
+    private func triggerAutoActivationIfReady() {
+        guard RvvmJitRouting.shouldAutoActivateJit(
+            hasPairingFile: hasPairingFile,
+            vpnReachable: vpnReachable,
+            isBusy: isBusy,
+            isPairing: isPairing,
+            hasAttemptedAutoActivation: hasAttemptedAutoActivation
+        ) else {
+            return
+        }
+        hasAttemptedAutoActivation = true
+        activateJitTapped()
+    }
+
+    @objc private func openLocalDevVpnTapped() {
+        openLocalDevVpn(automatic: false)
+    }
+
+    private func openLocalDevVpn(automatic: Bool) {
+        let callbackScheme = RvvmJitRouting.bundleCallbackScheme()
+        let url = RvvmJitRouting.localDevVpnEnableURL(callbackScheme: callbackScheme)
+        awaitingVpnReturn = true
+        hasAttemptedAutoActivation = false
+        statusLabel.text = automatic
+            ? "Opening LocalDevVPN automatically... DeskFleet Plus will activate JIT upon return."
+            : "Opening LocalDevVPN... DeskFleet Plus will activate JIT upon return."
+
+        UIApplication.shared.open(url, options: [:]) { [weak self] opened in
+            DispatchQueue.main.async {
+                guard let self, !self.completed else { return }
+                if !opened {
+                    self.awaitingVpnReturn = false
+                    self.statusLabel.text = "No app handling localdevvpn:// was found. Install LocalDevVPN or CalicoMeow, or enable your loopback VPN manually."
+                }
             }
         }
-        connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 2.0) {
-            finishProbe(false)
+    }
+
+    @objc private func openDeveloperModeSettingsTapped() {
+        let candidates = RvvmJitRouting.developerModeSettingsURLs(
+            fallbackSettingsURL: UIApplication.openSettingsURLString
+        )
+        openFirstAvailableURL(candidates, index: 0)
+    }
+
+    private func openFirstAvailableURL(_ urls: [URL], index: Int) {
+        guard index < urls.count else {
+            if !isPairing {
+                statusLabel.text = "Unable to open iOS Settings. Open Settings → Privacy & Security → Developer Mode manually."
+            }
+            return
+        }
+        UIApplication.shared.open(urls[index], options: [:]) { [weak self] opened in
+            guard !opened else { return }
+            DispatchQueue.main.async {
+                self?.openFirstAvailableURL(urls, index: index + 1)
+            }
         }
     }
 
@@ -206,8 +444,10 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
                 try FileManager.default.removeItem(at: pairingFileURL)
             }
             try FileManager.default.copyItem(at: picked, to: pairingFileURL)
+            hasAttemptedAutoActivation = false
             statusLabel.text = "Imported pairing file."
             refreshState()
+            triggerAutoActivationIfReady()
         } catch {
             statusLabel.text = "Failed to save pairing file: \(error.localizedDescription)"
         }
@@ -232,7 +472,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
                 case .published(let hostName, let port):
                     self.statusLabel.text = """
                     Advertising "\(hostName)" (port \(port)).
-                    1. Open iOS Settings → Privacy & Security → Developer Mode.
+                    1. Tap "Open Developer Mode (Wireless Pairing)" below, or open iOS Settings → Privacy & Security → Developer Mode.
                     2. Tap "\(hostName)" to start pairing.
                     3. Enter the 6-digit PIN from the notification (it will also appear here).
                     """
@@ -254,8 +494,18 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
                         let parent = self.pairingFileURL.deletingLastPathComponent()
                         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
                         try data.write(to: self.pairingFileURL, options: .atomic)
-                        self.statusLabel.text = "On-device pairing succeeded. Tap Activate Pure JIT to continue."
+                        self.hasAttemptedAutoActivation = false
+                        self.autoLaunchVpnRequested = true
+                        self.statusLabel.text = "On-device pairing succeeded. Checking LocalDevVPN to activate JIT..."
                         self.refreshState()
+                        if UIApplication.shared.applicationState == .active {
+                            self.probeLocalDevVpn(
+                                retriesRemaining: 1,
+                                retryInterval: 0.3,
+                                allowAutoLaunchVpn: true,
+                                isReturningFromVpn: false
+                            )
+                        }
                     } catch {
                         self.statusLabel.text = "Failed to store pairing file: \(error.localizedDescription)"
                     }
@@ -346,6 +596,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     }
 
     @objc private func cancelTapped() {
+        probeGeneration += 1
         setActiveJitToken(nil)
         onDevicePairing.cancel()
         finish(.failure(NSError(
@@ -357,9 +608,11 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
 
     private func setBusy(_ busy: Bool, message: String?) {
         isBusy = busy
+        openVpnButton.isEnabled = !busy
         importButton.isEnabled = !busy
         pairButton.isEnabled = !busy || isPairing
-        activateButton.isEnabled = !busy && FileManager.default.fileExists(atPath: pairingFileURL.path)
+        openDeveloperModeButton.isEnabled = true
+        activateButton.isEnabled = !busy && hasPairingFile
         if busy {
             activityIndicator.startAnimating()
         } else {
@@ -373,6 +626,7 @@ internal final class RvvmJitSetupViewController: UIViewController, UIDocumentPic
     private func finish(_ result: Result<Void, Error>) {
         guard !completed else { return }
         completed = true
+        probeGeneration += 1
         setActiveJitToken(nil)
         dismiss(animated: true) { [onComplete] in
             onComplete(result)

@@ -211,22 +211,41 @@ internal final class RvvmDaemonManager {
         let majorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
         let needsScript = majorVersion >= 26
 
-        // Try silent activation first if a pairing file already exists.
-        if FileManager.default.fileExists(atPath: pairingURL.path) {
-            emitStep("Activating Pure JIT for embedded Linux VM...")
-            RvvmJitHelperLauncher.activateJit(
-                withPairingPath: pairingURL.path,
-                targetPid: getpid(),
-                needsScript: needsScript
-            ) { _, _ in }
-
-            let quickDeadline = Date().addingTimeInterval(6.0)
-            while Date() < quickDeadline {
-                if isJitReadyForColdStart() {
-                    emitSuccess("Pure JIT activated.")
-                    return
+        // Try silent activation first only when both a pairing file and LocalDevVPN are ready.
+        let hasPairingFile = FileManager.default.fileExists(atPath: pairingURL.path)
+        if hasPairingFile {
+            if RvvmJitSetupViewController.probeLocalDevVpnSync(timeout: 0.8) {
+                emitStep("LocalDevVPN detected; activating Pure JIT for embedded Linux VM...")
+                let helperLock = NSLock()
+                var helperFailedMessage: String?
+                RvvmJitHelperLauncher.activateJit(
+                    withPairingPath: pairingURL.path,
+                    targetPid: getpid(),
+                    needsScript: needsScript
+                ) { success, errorMessage in
+                    guard !success else { return }
+                    helperLock.lock()
+                    helperFailedMessage = errorMessage ?? "JIT helper failed"
+                    helperLock.unlock()
                 }
-                Thread.sleep(forTimeInterval: 0.15)
+
+                let quickDeadline = Date().addingTimeInterval(8.0)
+                while Date() < quickDeadline {
+                    if isJitReadyForColdStart() {
+                        emitSuccess("Pure JIT activated.")
+                        return
+                    }
+                    helperLock.lock()
+                    let failure = helperFailedMessage
+                    helperLock.unlock()
+                    if let failure {
+                        emitWarning("Silent JIT activation failed: \(failure)")
+                        break
+                    }
+                    Thread.sleep(forTimeInterval: 0.15)
+                }
+            } else {
+                emitInfo("LocalDevVPN (10.7.0.1:62078) not detected; opening JIT setup...")
             }
         }
 
@@ -247,7 +266,10 @@ internal final class RvvmDaemonManager {
             while let next = top.presentedViewController, !next.isBeingDismissed {
                 top = next
             }
-            let controller = RvvmJitSetupViewController(pairingFileURL: pairingURL) { result in
+            let controller = RvvmJitSetupViewController(
+                pairingFileURL: pairingURL,
+                autoLaunchVpnOnAppear: hasPairingFile
+            ) { result in
                 setupResult = result
                 semaphore.signal()
             }

@@ -45,6 +45,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>stikdebug</string>
+		<string>localdevvpn</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
@@ -96,6 +97,14 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>ai.yetanother.deskfleet</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>moe.remon.deskfleet.plus</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>moe.remon.deskfleet.plus</string>
 			</array>
 		</dict>
 	</array>

@@ -14,11 +14,13 @@ try {
   copyFileSync(new URL("../Sources/DeskFleetBridge/RemoteDesktopInputState.swift", import.meta.url), join(workspace, "Sources", "DeskFleetLocalFiles", "RemoteDesktopInputState.swift"))
   copyFileSync(new URL("../Sources/DeskFleetBridge/RemoteDesktopControlState.swift", import.meta.url), join(workspace, "Sources", "DeskFleetLocalFiles", "RemoteDesktopControlState.swift"))
   copyFileSync(new URL("../Sources/DeskFleetBridge/RvvmDaemonCommands.swift", import.meta.url), join(workspace, "Sources", "DeskFleetLocalFiles", "RvvmDaemonCommands.swift"))
+  copyFileSync(new URL("../Sources/DeskFleetBridge/RvvmJitRouting.swift", import.meta.url), join(workspace, "Sources", "DeskFleetLocalFiles", "RvvmJitRouting.swift"))
   copyFileSync(new URL("./LocalFilesEndpointTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "LocalFilesEndpointTests.swift"))
   copyFileSync(new URL("./RemoteDesktopModifiersTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "RemoteDesktopModifiersTests.swift"))
   copyFileSync(new URL("./RemoteDesktopInputStateTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "RemoteDesktopInputStateTests.swift"))
   copyFileSync(new URL("./RemoteDesktopControlStateTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "RemoteDesktopControlStateTests.swift"))
   copyFileSync(new URL("./RvvmDaemonCommandsTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "RvvmDaemonCommandsTests.swift"))
+  copyFileSync(new URL("./RvvmJitRoutingTests.swift", import.meta.url), join(workspace, "Tests", "DeskFleetLocalFilesTests", "RvvmJitRoutingTests.swift"))
   writeFileSync(join(workspace, "Package.swift"), `// swift-tools-version: 5.9
 import PackageDescription
 let package = Package(name: "DeskFleetLocalFiles", platforms: [.macOS(.v13)], targets: [
