@@ -100,6 +100,7 @@ export async function packageIosRelease(
   signed: boolean,
   env: NodeJS.ProcessEnv = process.env,
   run: typeof runLoggedCommand = runLoggedCommand,
+  unsignedIpa: boolean = env.DESKFLEET_IOS_UNSIGNED_IPA === "1",
 ): Promise<void> {
   const release = iosRelease(env.IOS_VERSION_NAME?.trim() || readReleaseVersions(repoRoot).root, env)
   const signing = signed ? signingConfiguration(env) : undefined
@@ -133,7 +134,28 @@ export async function packageIosRelease(
     "archive",
   ], iosAppDir, join(diagnosticsDir, "archive.log"))
 
-  if (!signing) return
+  if (!signing) {
+    if (!unsignedIpa) return
+    const appBundle = join(archivePath, "Products/Applications/App.app")
+    if (!existsSync(appBundle)) {
+      throw new Error(`iOS archive did not produce ${appBundle}`)
+    }
+    const stagingDir = join(iosAppDir, "unsigned-ipa-staging")
+    const payloadDir = join(stagingDir, "Payload")
+    rmSync(stagingDir, { recursive: true, force: true })
+    mkdirSync(payloadDir, { recursive: true })
+    mkdirSync(exportDir, { recursive: true })
+    try {
+      await run("ditto", [appBundle, join(payloadDir, "App.app")], iosAppDir, join(diagnosticsDir, "export-stage.log"))
+      await run("ditto", ["-c", "-k", "--keepParent", "Payload", join(exportDir, release.ipa)], stagingDir, join(diagnosticsDir, "export.log"))
+      if (!existsSync(join(exportDir, release.ipa))) throw new Error(`iOS export did not produce ${release.ipa}`)
+      writeFileSync(join(exportDir, "release.json"), `${JSON.stringify(release, null, 2)}\n`)
+      rmSync(archivePath, { recursive: true, force: true })
+    } finally {
+      rmSync(stagingDir, { recursive: true, force: true })
+    }
+    return
+  }
   mkdirSync(exportDir, { recursive: true })
   writeFileSync(exportOptionsPath, exportOptions(signing))
   try {
@@ -153,5 +175,7 @@ export async function packageIosRelease(
 }
 
 if (import.meta.main) {
-  await packageIosRelease(resolve(import.meta.dirname, ".."), process.argv.includes("--signed") || process.env.DESKFLEET_IOS_SIGNED === "1")
+  const signed = process.argv.includes("--signed") || process.env.DESKFLEET_IOS_SIGNED === "1"
+  const unsignedIpa = process.argv.includes("--unsigned-ipa") || process.env.DESKFLEET_IOS_UNSIGNED_IPA === "1"
+  await packageIosRelease(resolve(import.meta.dirname, ".."), signed, process.env, runLoggedCommand, unsignedIpa)
 }

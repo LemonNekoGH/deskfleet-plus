@@ -58,8 +58,9 @@ packages, Nix bundles, AUR recipes, container images, Google Play uploads, or Te
   already contains `deskfleet-linux-arm64.tar.gz`, runs mobile `test` and `build`, invokes
   `ios-guest-riscv64.yml` on formal stable tags (`prerelease != 'true'`) to refresh the live
   `ios-guest-riscv64` guest image, and creates/updates a draft GitHub Release with
-  `deskfleet-<version>-android-arm64.apk` and, when signed iOS credentials are configured,
-  `deskfleet-<version>-ios-arm64.ipa`.
+  `deskfleet-<version>-android-arm64.apk` and `deskfleet-<version>-ios-arm64.ipa` (unsigned
+  sideloadable IPA by default when Apple signing secrets are absent, or signed IPA when
+  configured).
 - `.github/workflows/ios-guest-riscv64.yml`: Builds and publishes the pre-baked Ubuntu 24.04
   `riscv64` guest image (`deskfleet-riscv64.img.gz`) to the `ios-guest-riscv64` release tag
   (triggered on guest builder edits, manual dispatch, or `workflow_call` from `publish.yml`).

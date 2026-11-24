@@ -123,7 +123,7 @@ jobs:
           name: deskfleet-android-apk
           path: android-apk
 
-      - name: Download signed iOS IPA
+      - name: Download iOS IPA
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:

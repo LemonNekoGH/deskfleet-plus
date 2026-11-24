@@ -27,6 +27,7 @@ test("signed iOS rehearsal is explicit, production-scoped, and does not run othe
   assert.match(ios, /if: \$\{\{ inputs\.signed_ios \|\| inputs\.production_release \|\| inputs\.run_ios \}\}/)
   assert.match(ios, /environment: \$\{\{ \(inputs\.production_release \|\| inputs\.signed_ios\) && 'production' \|\| '' \}\}/)
   assert.match(step(ios, "Build iOS archive (smoke)"), /!inputs\.production_release && !inputs\.signed_ios/)
+  assert.match(step(ios, "Build production iOS Web assets and unsigned sideload IPA"), /DESKFLEET_IOS_UNSIGNED_IPA: "1"/)
   assert.doesNotMatch(build, /publish-ios-release|altool --upload/)
 })
 

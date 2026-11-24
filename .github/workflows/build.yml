@@ -228,9 +228,37 @@ jobs:
         if: ${{ !inputs.production_release && !inputs.signed_ios }}
         run: mise run ios:build
 
+      - name: Detect iOS release signing mode
+        id: ios_signing_mode
+        if: ${{ inputs.production_release || inputs.signed_ios }}
+        shell: bash
+        env:
+          SIGNED_IOS: ${{ inputs.signed_ios }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DIST_CERT_P12: ${{ secrets.IOS_DIST_CERT_P12 }}
+        run: |
+          if [[ "$SIGNED_IOS" == "true" || (-n "$APPLE_TEAM_ID" && -n "$IOS_DIST_CERT_P12") ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build production iOS Web assets and unsigned sideload IPA
+        if: ${{ inputs.production_release && !inputs.signed_ios && steps.ios_signing_mode.outputs.signed != 'true' }}
+        env:
+          VITE_DESKFLEET_SERVER_URL: ${{ vars.VITE_DESKFLEET_SERVER_URL || 'https://deskfleet.yetanother.ai' }}
+          VITE_STATSIG_CLIENT_KEY: ${{ vars.VITE_STATSIG_CLIENT_KEY }}
+          VITE_STATSIG_ENVIRONMENT: ${{ vars.VITE_STATSIG_ENVIRONMENT }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_SENTRY_ENVIRONMENT: ${{ vars.VITE_SENTRY_ENVIRONMENT }}
+          VITE_SENTRY_DIST: ios
+          VITE_SENTRY_RELEASE: deskfleet@${{ github.ref_name }}
+          DESKFLEET_IOS_UNSIGNED_IPA: "1"
+        run: mise run ios:build
+
       - name: Prepare iOS release signing credentials
         id: ios_credentials
-        if: ${{ inputs.production_release || inputs.signed_ios }}
+        if: ${{ (inputs.production_release || inputs.signed_ios) && steps.ios_signing_mode.outputs.signed == 'true' }}
         shell: bash
         env:
           DESKTOP_SERVER_URL: ${{ vars.VITE_DESKFLEET_SERVER_URL }}
@@ -275,7 +303,7 @@ jobs:
           security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | tr -d '"')
 
       - name: Download and validate iOS distribution profiles
-        if: ${{ inputs.production_release || inputs.signed_ios }}
+        if: ${{ (inputs.production_release || inputs.signed_ios) && steps.ios_signing_mode.outputs.signed == 'true' }}
         env:
           IOS_SIGNING_KEYCHAIN: ${{ steps.ios_credentials.outputs.keychain_path }}
           IOS_APP_PROFILE_NAME: ${{ vars.IOS_APP_PROFILE_NAME }}
@@ -287,7 +315,7 @@ jobs:
         run: mise exec node -- node scripts/prepare-ios-signing.ts
 
       - name: Build production iOS Web assets and signed IPA
-        if: ${{ inputs.production_release || inputs.signed_ios }}
+        if: ${{ (inputs.production_release || inputs.signed_ios) && steps.ios_signing_mode.outputs.signed == 'true' }}
         env:
           VITE_DESKFLEET_SERVER_URL: ${{ vars.VITE_DESKFLEET_SERVER_URL }}
           VITE_STATSIG_CLIENT_KEY: ${{ vars.VITE_STATSIG_CLIENT_KEY }}

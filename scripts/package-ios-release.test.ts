@@ -90,6 +90,32 @@ test("unsigned smoke archives need no signing settings and do not produce releas
   assert.equal(existsSync(join(app, "output/release.json")), false)
 })
 
+test("unsigned sideload IPA packages Payload/App.app without Apple signing credentials", async context => {
+  const { root, app, env } = fixture(context)
+  const calls: { command: string; args: string[]; cwd: string }[] = []
+  await packageIosRelease(root, false, { ...env, DESKFLEET_IOS_UNSIGNED_IPA: "1" }, async (command, args, cwd, logPath) => {
+    calls.push({ command, args, cwd })
+    writeFileSync(logPath, `${command} fixture\n`)
+    if (command === "xcodebuild") {
+      mkdirSync(join(app, "App.xcarchive/Products/Applications/App.app"), { recursive: true })
+    } else if (command === "ditto" && args.includes("-c")) {
+      writeFileSync(join(app, "output/App.ipa"), "unsigned sideload IPA fixture")
+    }
+  })
+  assert.equal(calls.length, 3)
+  assert.equal(calls[0]!.command, "xcodebuild")
+  assert.ok(calls[0]!.args.includes("CODE_SIGNING_ALLOWED=NO"))
+  assert.equal(calls[1]!.command, "ditto")
+  assert.equal(calls[1]!.args[0], join(app, "App.xcarchive/Products/Applications/App.app"))
+  assert.equal(calls[2]!.command, "ditto")
+  assert.deepEqual(calls[2]!.args, ["-c", "-k", "--keepParent", "Payload", join(app, "output/App.ipa")])
+  assert.deepEqual(JSON.parse(readFileSync(join(app, "output/release.json"), "utf8")), {
+    bundleId: "moe.remon.deskfleet.plus", version: "0.16.0", buildNumber: "1234.2", ipa: "App.ipa",
+  })
+  assert.equal(existsSync(join(app, "App.xcarchive")), false)
+  assert.equal(existsSync(join(app, "unsigned-ipa-staging")), false)
+})
+
 test("signed packaging rejects missing prepared settings before invoking Xcode", async context => {
   const { root, env } = fixture(context)
   for (const name of Object.keys(signing)) {
