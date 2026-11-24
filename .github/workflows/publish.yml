@@ -16,10 +16,14 @@ jobs:
     name: Validate release tag
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       prerelease: ${{ steps.release.outputs.prerelease }}
+      skip_test: ${{ steps.reuse_test.outputs.skip_test || 'false' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,9 +47,22 @@ jobs:
           TAG_NAME: ${{ steps.release.outputs.tag }}
         run: mise exec node -- node scripts/check-upstream-release.ts --require-tag "$TAG_NAME"
 
+      - name: Check existing main CI test results
+        id: reuse_test
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "skip_test=false" >> "$GITHUB_OUTPUT"
+          if ! mise exec node -- node scripts/ci-check-existing-run.ts publish-test; then
+            echo "::warning::Could not verify existing main CI test results; running full Test suite."
+            echo "skip_test=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test
     needs: validate
+    if: ${{ needs.validate.outputs.skip_test != 'true' }}
     uses: ./.github/workflows/test.yml
     permissions:
       contents: read
@@ -76,7 +93,10 @@ jobs:
     name: Update iOS RISC-V 64 guest image
     needs: [validate, test]
     # Only refresh the live pre-baked guest image on formal stable releases.
-    if: ${{ !cancelled() && needs.validate.outputs.prerelease != 'true' }}
+    if: >-
+      ${{ !cancelled() && needs.validate.result == 'success' &&
+          needs.validate.outputs.prerelease != 'true' &&
+          (needs.test.result == 'success' || (needs.test.result == 'skipped' && needs.validate.outputs.skip_test == 'true')) }}
     uses: ./.github/workflows/ios-guest-riscv64.yml
     with:
       publish_release: true
@@ -88,7 +108,8 @@ jobs:
     name: Create draft GitHub release
     needs: [validate, test, build, ios_guest]
     if: >-
-      ${{ !cancelled() && needs.validate.result == 'success' && needs.test.result == 'success' &&
+      ${{ !cancelled() && needs.validate.result == 'success' &&
+          (needs.test.result == 'success' || (needs.test.result == 'skipped' && needs.validate.outputs.skip_test == 'true')) &&
           needs.build.result == 'success' &&
           (needs.ios_guest.result == 'success' || needs.ios_guest.result == 'skipped') }}
     runs-on: ubuntu-26.04

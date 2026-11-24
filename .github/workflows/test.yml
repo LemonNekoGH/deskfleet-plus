@@ -19,7 +19,17 @@ on:
         required: false
         default: false
       all_platforms:
-        description: Run iOS Simulator tests in addition to Android tests.
+        description: Run full mobile test coverage across Android and iOS.
+        type: boolean
+        required: false
+        default: true
+      run_android:
+        description: Run Android Gradle unit tests and lint.
+        type: boolean
+        required: false
+        default: true
+      run_ios:
+        description: Build and verify the iOS Simulator app.
         type: boolean
         required: false
         default: true
@@ -41,7 +51,17 @@ on:
         required: false
         default: false
       all_platforms:
-        description: Run iOS Simulator tests in addition to Android tests.
+        description: Run full mobile test coverage across Android and iOS.
+        type: boolean
+        required: false
+        default: true
+      run_android:
+        description: Run Android Gradle unit tests and lint.
+        type: boolean
+        required: false
+        default: true
+      run_ios:
+        description: Build and verify the iOS Simulator app.
         type: boolean
         required: false
         default: true
@@ -65,6 +85,8 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
+          tools: node pnpm rust cargo:cargo-shear npm:@informalsystems/quint
+          install-native-deps: "false"
 
       - name: Run preflight checks
         run: mise run ci:preflight
@@ -73,7 +95,7 @@ jobs:
     name: Tests (Android)
     needs: preflight
     if: >-
-      ${{ !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
+      ${{ inputs.run_android && !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
           (github.event_name == 'pull_request' ||
           (github.event_name == 'push' && github.ref == 'refs/heads/main'))) }}
     runs-on: ubuntu-26.04
@@ -87,6 +109,8 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
+          tools: node pnpm java rust cmake
+          install-native-deps: "false"
 
       - name: Configure Gradle Maven Central mirror
         uses: ./.github/actions/setup-gradle-mirror
@@ -98,7 +122,7 @@ jobs:
     name: Tests (iOS)
     needs: preflight
     if: >-
-      ${{ inputs.all_platforms && !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
+      ${{ inputs.run_ios && !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
           (github.event_name == 'pull_request' ||
           (github.event_name == 'push' && github.ref == 'refs/heads/main'))) }}
     runs-on: macos-latest
@@ -112,6 +136,10 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
+          tools: node pnpm rust cmake
+          install-native-deps: "false"
 
       - name: Build and verify iOS Simulator app
+        env:
+          DESKFLEET_IOS_TARGETS: aarch64-apple-ios-sim
         run: mise run ios:test

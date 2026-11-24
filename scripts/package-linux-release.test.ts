@@ -5,11 +5,13 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test, { type TestContext } from "node:test"
 import {
+  debBuildArgs,
   linuxPackageFilename,
   linuxPackageVersion,
   packageLinuxRelease,
   renderDebControl,
   renderRpmSpec,
+  rpmBuildArgs,
 } from "./package-linux-release.ts"
 
 const repository = join(import.meta.dirname, "..")
@@ -97,6 +99,17 @@ test("package metadata renders complete control and spec files", () => {
   assert.doesNotMatch(spec, /@[A-Z_]+@/u)
 })
 
+test("fast compression selects low-overhead gzip payloads while release keeps defaults", () => {
+  assert.deepEqual(debBuildArgs("/tmp/root", "/tmp/out.deb", "fast"), ["-Zgzip", "-z1", "--root-owner-group", "--build", "/tmp/root", "/tmp/out.deb"])
+  assert.deepEqual(debBuildArgs("/tmp/root", "/tmp/out.deb", "release"), ["--root-owner-group", "--build", "/tmp/root", "/tmp/out.deb"])
+  assert.deepEqual(rpmBuildArgs("x86_64", "/tmp/top", "/tmp/src", "/tmp/spec", "fast"), [
+    "-bb", "--target", "x86_64", "--define", "_topdir /tmp/top", "--define", "_sourcedir /tmp/src",
+    "--define", "_binary_payload w1.gzdio", "/tmp/spec",
+  ])
+  assert.deepEqual(rpmBuildArgs("x86_64", "/tmp/top", "/tmp/src", "/tmp/spec", "release"), [
+    "-bb", "--target", "x86_64", "--define", "_topdir /tmp/top", "--define", "_sourcedir /tmp/src", "/tmp/spec",
+  ])
+})
 test("builds installable deb and rpm packages from desktop archives", { skip: !buildable }, async context => {
   const architecture = process.arch === "arm64" ? "arm64" : "x64"
   const debArchitecture = architecture === "x64" ? "amd64" : "arm64"
@@ -163,6 +176,7 @@ test("rejects mismatched, duplicate, incomplete and invalid desktop archives bef
   }
   await assert.rejects(packageLinuxRelease(directory, output, [valid, valid]), /Duplicate desktop archive for x64/)
   await assert.rejects(packageLinuxRelease(directory, output, [valid], { formats: ["pacman" as never] }), /Linux package formats/)
+  await assert.rejects(packageLinuxRelease(directory, output, [valid], { compression: "ultra" as never }), /Linux package compression/)
   await assert.rejects(packageLinuxRelease(directory, output, [valid], { version: "1.2.3'; touch unsafe" }), /Release tag must be/)
   const incomplete = archive(directory, "arm64", "1.2.3", "resources/app.asar.unpacked/out/main/deskfleet.node")
   await assert.rejects(packageLinuxRelease(directory, output, [incomplete]), /missing .*deskfleet\.node/)

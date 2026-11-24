@@ -19,8 +19,12 @@ test("signed iOS rehearsal is explicit, production-scoped, and does not run othe
   const dispatch = build.split("  workflow_dispatch:\n")[1]?.split("  workflow_call:")[0]
   assert.match(dispatch ?? "", /signed_ios:[\s\S]*?type: boolean[\s\S]*?default: false/)
   assert.equal(job(build, "package"), "")
-  assert.match(job(build, "android"), /if: \$\{\{ !inputs\.signed_ios \}\}/)
+  for (const input of ["run_android", "run_ios"]) {
+    assert.match(dispatch ?? "", new RegExp(`${input}:[\\s\\S]*?type: boolean[\\s\\S]*?default: true`), `workflow_dispatch must default ${input} to true`)
+  }
+  assert.match(job(build, "android"), /if: \$\{\{ !inputs\.signed_ios && \(inputs\.production_release \|\| inputs\.run_android\) \}\}/)
   const ios = job(build, "ios")
+  assert.match(ios, /if: \$\{\{ inputs\.signed_ios \|\| inputs\.production_release \|\| inputs\.run_ios \}\}/)
   assert.match(ios, /environment: \$\{\{ \(inputs\.production_release \|\| inputs\.signed_ios\) && 'production' \|\| '' \}\}/)
   assert.match(step(ios, "Build iOS archive (smoke)"), /!inputs\.production_release && !inputs\.signed_ios/)
   assert.doesNotMatch(build, /publish-ios-release|altool --upload/)

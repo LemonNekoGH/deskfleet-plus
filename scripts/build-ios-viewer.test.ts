@@ -5,11 +5,13 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import test from "node:test"
 import {
+  ALL_IOS_VIEWER_TARGETS,
   buildStaticFrameworkBundle,
   buildStikJitInfoPlist,
   buildStikJitXcframeworkPlist,
   downloadCachedArtifact,
   FORBIDDEN_STAGED_ARTIFACTS,
+  iosViewerTargets,
   prepareLibrvvmHeaders,
   purgeGplRvvmSources,
   RVVM_EXCLUDED_GPL_SOURCES,
@@ -276,4 +278,34 @@ test("pinned iOS librvvm artifacts, patch, Xcode wiring, and notices exclude GPL
   assert.match(notices, /librvvm/i)
   assert.match(notices, /StikJIT/)
   assert.match(notices, /OpenSBI/)
+})
+
+test("iosViewerTargets defaults to both device and simulator slices", () => {
+  assert.deepEqual(iosViewerTargets({}, []), ALL_IOS_VIEWER_TARGETS)
+  assert.deepEqual(iosViewerTargets({ DESKFLEET_IOS_TARGETS: "   " }, []), ALL_IOS_VIEWER_TARGETS)
+})
+
+test("iosViewerTargets selects single slices from env or CLI flags and deduplicates", () => {
+  assert.deepEqual(
+    iosViewerTargets({ DESKFLEET_IOS_TARGETS: "aarch64-apple-ios" }, []),
+    ["aarch64-apple-ios"],
+  )
+  assert.deepEqual(
+    iosViewerTargets({ DESKFLEET_IOS_TARGETS: "aarch64-apple-ios-sim, aarch64-apple-ios-sim" }, []),
+    ["aarch64-apple-ios-sim"],
+  )
+  assert.deepEqual(
+    iosViewerTargets({ DESKFLEET_IOS_TARGETS: "aarch64-apple-ios" }, ["--target", "aarch64-apple-ios-sim"]),
+    ["aarch64-apple-ios-sim"],
+  )
+  assert.deepEqual(
+    iosViewerTargets({}, ["--target=aarch64-apple-ios,aarch64-apple-ios-sim"]),
+    ALL_IOS_VIEWER_TARGETS,
+  )
+})
+
+test("iosViewerTargets rejects unsupported or empty targets", () => {
+  assert.throws(() => iosViewerTargets({ DESKFLEET_IOS_TARGETS: "x86_64-apple-ios" }, []), /Unsupported iOS viewer target/)
+  assert.throws(() => iosViewerTargets({ DESKFLEET_IOS_TARGETS: "," }, []), /Select at least one/)
+  assert.throws(() => iosViewerTargets({}, ["--target"]), /requires an iOS Rust target triple/)
 })

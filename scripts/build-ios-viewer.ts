@@ -17,6 +17,46 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { inflateRawSync } from "node:zlib"
 
+export const ALL_IOS_VIEWER_TARGETS = ["aarch64-apple-ios", "aarch64-apple-ios-sim"] as const
+export type IosViewerTarget = (typeof ALL_IOS_VIEWER_TARGETS)[number]
+
+/** Resolve the iOS Rust targets to build; defaults to both device and simulator slices. */
+export function iosViewerTargets(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv.slice(2),
+): readonly IosViewerTarget[] {
+  const cliTargets: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === "--target") {
+      const value = argv[++i]
+      if (!value) throw new Error("--target requires an iOS Rust target triple")
+      cliTargets.push(...value.split(","))
+    } else if (arg?.startsWith("--target=")) {
+      cliTargets.push(...arg.slice("--target=".length).split(","))
+    }
+  }
+  const raw = cliTargets.length > 0
+    ? cliTargets
+    : env.DESKFLEET_IOS_TARGETS?.trim()
+      ? env.DESKFLEET_IOS_TARGETS.split(",")
+      : [...ALL_IOS_VIEWER_TARGETS]
+  const selected: IosViewerTarget[] = []
+  for (const item of raw) {
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    if (!(ALL_IOS_VIEWER_TARGETS as readonly string[]).includes(trimmed)) {
+      throw new Error(`Unsupported iOS viewer target "${trimmed}"; expected one of: ${ALL_IOS_VIEWER_TARGETS.join(", ")}`)
+    }
+    const target = trimmed as IosViewerTarget
+    if (!selected.includes(target)) selected.push(target)
+  }
+  if (selected.length === 0) {
+    throw new Error(`Select at least one iOS viewer target (${ALL_IOS_VIEWER_TARGETS.join(", ")})`)
+  }
+  return selected
+}
+
 export interface BinaryArtifactSpec {
   readonly name: string
   readonly version: string
@@ -728,9 +768,13 @@ export function buildRppairingXcframework(repoRoot: string, frameworksDir: strin
   }
 }
 
-export function buildViewerXcframework(repoRoot: string, frameworksDir: string, release: boolean): string {
+export function buildViewerXcframework(
+  repoRoot: string,
+  frameworksDir: string,
+  release: boolean,
+  targets: readonly IosViewerTarget[] = ALL_IOS_VIEWER_TARGETS,
+): string {
   const profile = release ? "release" : "debug"
-  const targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim"] as const
 
   const installed = execFileSync("rustup", ["target", "list", "--installed"], {
     cwd: repoRoot,
@@ -806,8 +850,9 @@ if (import.meta.main) {
   const frameworksDir = join(repoRoot, "packages/capacitor-bridge/ios/Frameworks")
   const cacheDir = process.env.DESKFLEET_IOS_CACHE_DIR || join(repoRoot, "target/ios-rvvm-cache")
 
-  const viewerXcframework = buildViewerXcframework(repoRoot, frameworksDir, release)
-  console.log(`Staged ${viewerXcframework}`)
+  const targets = iosViewerTargets(process.env, process.argv.slice(2))
+  const viewerXcframework = buildViewerXcframework(repoRoot, frameworksDir, release, targets)
+  console.log(`Staged ${viewerXcframework} (${targets.join(", ")})`)
 
   const rppairingXcframework = buildRppairingXcframework(repoRoot, frameworksDir)
   console.log(`Staged ${rppairingXcframework}`)
