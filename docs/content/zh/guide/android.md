@@ -88,3 +88,5 @@ Android 客户端与 Web 端不显示桌面版的本机设置项，如需开启�
 1. 安装第三方构建的 **`DeskFleet Plus`** APK（包名 `moe.remon.deskfleet.plus`，与官方 `ai.yetanother.deskfleet` 应用相互独立）。
 2. 登录应用，打开 **添加机器 → 此电脑（本机）** 并确认注册。
 3. 应用会自动在私有沙箱目录内初始化 Debian `arm64` `proot` 容器并部署内置的 `deskfleet-daemon` 与 `scrcpy-server`，通过前台常驻服务与唤醒锁拉起守护进程并自动完成当前团队注册，无需 Root 或手动命令行操作。
+
+关于与上游的完整对比、Android 无线 ADB 配对以及 iOS 内置虚拟机使用说明，请参阅 [DeskFleet Plus（移动端内置 Daemon）](./deskfleet-plus)。

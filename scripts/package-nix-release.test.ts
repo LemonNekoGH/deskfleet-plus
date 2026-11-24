@@ -82,14 +82,6 @@ test("CLI packages a single architecture and preserves prerelease versions", con
     `https://github.com/yet-another-ai/deskfleet/releases/download/v1.2.3-rc.1/${filename}`)
 })
 
-test("publish workflow packages both macOS desktop ZIPs into the Nix release flake", () => {
-  const yaml = readFileSync(join(import.meta.dirname, "../.github/workflows/publish.yml"), "utf8")
-  const step = yaml.match(/Package the Nix release flake[\s\S]*?mac-arm64\.zip[\s\S]*?(?:\n\n|\n      - name:)/)
-  assert.ok(step, "Missing Nix packaging step in publish.yml")
-  assert.match(step[0]!, /deskfleet-\$VERSION-mac-arm64\.zip/)
-  assert.match(step[0]!, /deskfleet-\$VERSION-mac-x64\.zip/)
-})
-
 test("rejects mismatched releases, unsupported targets and duplicate architectures before writing output", async context => {
   const directory = fixture(context)
   const output = join(directory, "deskfleet-nix.tar.gz")

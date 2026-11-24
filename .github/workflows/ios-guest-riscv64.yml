@@ -15,6 +15,18 @@ on:
         description: Release tag for pre-baked iOS RISC-V 64 guest image
         type: string
         default: ios-guest-riscv64
+  workflow_call:
+    inputs:
+      publish_release:
+        description: Publish deskfleet-riscv64.img.gz to a GitHub Release on this fork
+        type: boolean
+        required: false
+        default: true
+      release_tag:
+        description: Release tag for pre-baked iOS RISC-V 64 guest image
+        type: string
+        required: false
+        default: ios-guest-riscv64
 
 permissions:
   contents: write

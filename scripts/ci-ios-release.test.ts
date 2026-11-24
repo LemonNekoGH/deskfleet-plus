@@ -18,8 +18,8 @@ test("signed iOS rehearsal is explicit, production-scoped, and does not run othe
   const build = workflow("build")
   const dispatch = build.split("  workflow_dispatch:\n")[1]?.split("  workflow_call:")[0]
   assert.match(dispatch ?? "", /signed_ios:[\s\S]*?type: boolean[\s\S]*?default: false/)
-  for (const name of ["package", "android"])
-    assert.match(job(build, name), /if: \$\{\{ !inputs\.signed_ios \}\}/)
+  assert.equal(job(build, "package"), "")
+  assert.match(job(build, "android"), /if: \$\{\{ !inputs\.signed_ios \}\}/)
   const ios = job(build, "ios")
   assert.match(ios, /environment: \$\{\{ \(inputs\.production_release \|\| inputs\.signed_ios\) && 'production' \|\| '' \}\}/)
   assert.match(step(ios, "Build iOS archive (smoke)"), /!inputs\.production_release && !inputs\.signed_ios/)
@@ -43,17 +43,16 @@ test("only profile preparation receives API credentials in the iOS build", () =>
   assert.doesNotMatch(diagnostics, /App\.xcarchive|\.p12|\.p8|mobileprovision/)
 })
 
-test("TestFlight consumes the signed artifact after all release gates using the build's Xcode", () => {
-  const ios = job(workflow("build"), "ios")
-  const publish = job(workflow("publish"), "testflight")
-  assert.match(publish, /needs: \[validate, test, build, nix, aur, linux_packages\]/)
-  assert.match(publish, /environment: production/)
-  assert.match(publish, /actions\/download-artifact@/)
-  assert.match(publish, /name: deskfleet-ios/)
-  assert.match(publish, /scripts\/publish-ios-release\.ts ios-release/)
-  assert.equal(publish.match(/DEVELOPER_DIR: (.+)/)?.[1], ios.match(/DEVELOPER_DIR: (.+)/)?.[1])
-  assert.equal(publish.match(/runs-on: (.+)/)?.[1], ios.match(/runs-on: (.+)/)?.[1])
-  assert.match(step(publish, "Remove App Store Connect API key"), /always\(\)/)
+test("draft GitHub release consumes mobile artifacts without store publication jobs", () => {
+  const publishYaml = workflow("publish")
+  const release = job(publishYaml, "release")
+  assert.match(release, /needs: \[validate, test, build, ios_guest\]/)
+  assert.match(release, /name: deskfleet-android-apk/)
+  assert.match(release, /name: deskfleet-ios/)
+  assert.match(release, /deskfleet-\$VERSION-android-arm64\.apk/)
+  assert.match(release, /deskfleet-\$VERSION-ios-arm64\.ipa/)
+  assert.equal(job(publishYaml, "testflight"), "")
+  assert.equal(job(publishYaml, "google_play"), "")
 })
 
 test("failed P12 import still records the keychain and removes credential files", { skip: process.platform === "win32" }, context => {

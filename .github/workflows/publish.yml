@@ -37,6 +37,12 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: mise exec node -- node scripts/release-version.ts "$TAG_NAME"
 
+      - name: Verify upstream release has linux-arm64 daemon archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: mise exec node -- node scripts/check-upstream-release.ts --require-tag "$TAG_NAME"
+
   test:
     name: Test
     needs: validate
@@ -53,9 +59,6 @@ jobs:
     permissions:
       contents: read
     secrets:
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
       APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -68,95 +71,54 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_GOOGLE_SERVICES_JSON: ${{ secrets.ANDROID_GOOGLE_SERVICES_JSON }}
       IOS_GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.IOS_GOOGLE_SERVICE_INFO_PLIST }}
-      WINDOWS_SERVICE_SIGNING_KEY: ${{ secrets.WINDOWS_SERVICE_SIGNING_KEY }}
 
-  nix:
-    name: Nix
-    needs: build
-    uses: ./.github/workflows/nix.yml
+  ios_guest:
+    name: Update iOS RISC-V 64 guest image
+    needs: [validate, test]
+    # Only refresh the live pre-baked guest image on formal stable releases.
+    if: ${{ !cancelled() && needs.validate.outputs.prerelease != 'true' }}
+    uses: ./.github/workflows/ios-guest-riscv64.yml
+    with:
+      publish_release: true
+      release_tag: ios-guest-riscv64
     permissions:
-      contents: read
-
-  aur:
-    name: AUR
-    needs: build
-    uses: ./.github/workflows/aur.yml
-    permissions:
-      contents: read
-
-  linux_packages:
-    name: Linux packages
-    needs: build
-    uses: ./.github/workflows/linux-packages.yml
-    permissions:
-      contents: read
+      contents: write
 
   release:
     name: Create draft GitHub release
-    needs: [validate, test, build, nix, aur, linux_packages]
+    needs: [validate, test, build, ios_guest]
+    if: >-
+      ${{ !cancelled() && needs.validate.result == 'success' && needs.test.result == 'success' &&
+          needs.build.result == 'success' &&
+          (needs.ios_guest.result == 'success' || needs.ios_guest.result == 'skipped') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install locked Node and pnpm
-        uses: ./.github/actions/setup-mise
-        with:
-          tools: node pnpm
-          github-token: ${{ github.token }}
-
-      - name: Download desktop installers
-        uses: actions/download-artifact@v8
-        with:
-          pattern: deskfleet-desktop-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Download Linux distribution packages
-        uses: actions/download-artifact@v8
-        with:
-          pattern: deskfleet-linux-packages-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Download server and daemon archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: deskfleet-{linux-x64,linux-arm64,macos-arm64,macos-x64,windows-x64}
-          path: release-assets
-          merge-multiple: true
-
       - name: Download Android APK
         uses: actions/download-artifact@v8
         with:
           name: deskfleet-android-apk
           path: android-apk
 
-      - name: Stage the Android APK
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: mv android-apk/app-release-signed.apk "release-assets/deskfleet-$VERSION-android-arm64.apk"
+      - name: Download signed iOS IPA
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: deskfleet-ios
+          path: ios-release
 
-      - name: Package the Nix release flake
+      - name: Stage mobile release assets
+        shell: bash
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          mise exec node -- node scripts/package-nix-release.ts release-assets/deskfleet-nix.tar.gz \
-            "release-assets/deskfleet-$VERSION-linux-x64.tar.gz" \
-            "release-assets/deskfleet-$VERSION-linux-arm64.tar.gz" \
-            "release-assets/deskfleet-$VERSION-mac-arm64.zip" \
-            "release-assets/deskfleet-$VERSION-mac-x64.zip"
-
-      - name: Merge macOS update metadata
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          pnpm --filter deskfleet install --frozen-lockfile
-          mise exec node -- node scripts/merge-macos-updates.ts release-assets "$VERSION"
+          mkdir -p release-assets
+          mv android-apk/app-release-signed.apk "release-assets/deskfleet-$VERSION-android-arm64.apk"
+          if [[ -f ios-release/App.ipa ]]; then
+            mv ios-release/App.ipa "release-assets/deskfleet-$VERSION-ios-arm64.ipa"
+          fi
 
       - name: Verify release assets
         shell: bash
@@ -164,41 +126,12 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           assets=(
-            "deskfleet-$VERSION-mac-arm64.dmg"
-            "deskfleet-$VERSION-mac-arm64.zip"
-            "deskfleet-$VERSION-mac-x64.dmg"
-            "deskfleet-$VERSION-mac-x64.zip"
-            "deskfleet-$VERSION-win-x64.exe"
-            "deskfleet-$VERSION-linux-x86_64.AppImage"
-            "deskfleet-$VERSION-linux-arm64.AppImage"
-            "deskfleet-$VERSION-linux-amd64.deb"
-            "deskfleet-$VERSION-linux-arm64.deb"
-            "deskfleet-$VERSION-linux-x86_64.rpm"
-            "deskfleet-$VERSION-linux-aarch64.rpm"
-            "deskfleet-$VERSION-linux-x64.tar.gz"
-            "deskfleet-$VERSION-linux-arm64.tar.gz"
             "deskfleet-$VERSION-android-arm64.apk"
-            deskfleet-nix.tar.gz
-            "deskfleet-$VERSION-mac-arm64.zip.blockmap"
-            "deskfleet-$VERSION-mac-x64.zip.blockmap"
-            "deskfleet-$VERSION-win-x64.exe.blockmap"
-            latest.yml
-            latest-mac.yml
-            latest-linux.yml
-            latest-linux-arm64.yml
-            deskfleet-linux-x64.tar.gz
-            deskfleet-linux-arm64.tar.gz
-            deskfleet-macos-arm64.tar.gz
-            deskfleet-macos-x64.tar.gz
-            deskfleet-windows-x64.tar.gz
           )
-          # DMG blockmaps can be generated alongside the ZIP used by the updater.
-          for arch in arm64 x64; do
-            blockmap="deskfleet-$VERSION-mac-$arch.dmg.blockmap"
-            if [[ -f "release-assets/$blockmap" ]]; then
-              assets+=("$blockmap")
-            fi
-          done
+          ios_ipa="deskfleet-$VERSION-ios-arm64.ipa"
+          if [[ -f "release-assets/$ios_ipa" ]]; then
+            assets+=("$ios_ipa")
+          fi
           for asset in "${assets[@]}"; do
             test -s "release-assets/$asset"
           done
@@ -219,185 +152,7 @@ jobs:
             fi
             gh release upload "$TAG_NAME" release-assets/* --clobber
           else
-            args=(--verify-tag --generate-notes --title "DeskFleet $TAG_NAME" --draft)
+            args=(--verify-tag --generate-notes --title "DeskFleet Plus $TAG_NAME" --draft)
             if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
             gh release create "$TAG_NAME" release-assets/* "${args[@]}"
           fi
-
-  image:
-    name: Publish server and Web image
-    needs: [validate, test, build, nix, aur, linux_packages]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Download Linux server archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: deskfleet-linux-*
-          path: archives
-          merge-multiple: true
-
-      - name: Download the same-release Web client
-        uses: actions/download-artifact@v8
-        with:
-          name: deskfleet-web
-          path: image-context/web
-
-      - name: Stage native server binaries
-        shell: bash
-        run: |
-          mkdir -p image-context/amd64 image-context/arm64
-          tar -xzf archives/deskfleet-linux-x64.tar.gz -C image-context/amd64 ./deskfleet-server
-          tar -xzf archives/deskfleet-linux-arm64.tar.gz -C image-context/arm64 ./deskfleet-server
-
-      - uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Generate image metadata
-        id: metadata
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}-server
-          flavor: latest=false
-          tags: |
-            type=raw,value=${{ needs.validate.outputs.version }}
-            type=raw,value=latest,enable=${{ needs.validate.outputs.prerelease == 'false' }}
-
-      - name: Publish both Linux architectures
-        uses: docker/build-push-action@v7
-        with:
-          context: image-context
-          file: apps/server/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-
-  super_agent_image:
-    name: Publish Super Agent image
-    needs: [validate, test, build, nix, aur, linux_packages]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Download both tested Linux images
-        uses: actions/download-artifact@v8
-        with:
-          pattern: deskfleet-super-agent-image-*
-          path: images
-          merge-multiple: true
-
-      - name: Assemble the multi-architecture manifest
-        shell: bash
-        run: |
-          podman manifest create deskfleet-super-agent
-          for platform in linux-x64 linux-arm64; do
-            podman manifest add deskfleet-super-agent "docker-archive:$PWD/images/super-agent-$platform.tar.gz"
-          done
-          podman manifest inspect deskfleet-super-agent | jq -e \
-            '[.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64", "linux/arm64"]'
-
-      - name: Publish the release tags to GitHub Container Registry
-        shell: bash
-        env:
-          REGISTRY_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate.outputs.version }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-        run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}-super-agent"
-          printf '%s' "$REGISTRY_TOKEN" | podman login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
-          podman manifest push --all deskfleet-super-agent "docker://$image:$VERSION"
-          if [[ "$PRERELEASE" == false ]]; then
-            skopeo copy --all --preserve-digests "docker://$image:$VERSION" "docker://$image:latest"
-          fi
-
-  google_play:
-    name: Publish to Google Play (internal)
-    needs: [validate, test, build, nix, aur, linux_packages]
-    runs-on: ubuntu-26.04
-    environment: production
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Download signed Android App Bundle
-        uses: actions/download-artifact@v8
-        with:
-          name: deskfleet-android
-          path: android-release
-
-      - name: Upload to Google Play internal track
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: ai.yetanother.deskfleet
-          releaseFiles: android-release/app-release-signed.aab
-          track: internal
-          status: completed
-
-  testflight:
-    name: Publish to TestFlight
-    needs: [validate, test, build, nix, aur, linux_packages]
-    runs-on: macos-26
-    environment: production
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Verify the pinned iOS toolchain
-        run: xcodebuild -version
-
-      - name: Install locked Node
-        uses: ./.github/actions/setup-mise
-        with:
-          tools: node
-          github-token: ${{ github.token }}
-
-      - name: Download signed iOS IPA
-        uses: actions/download-artifact@v8
-        with:
-          name: deskfleet-ios
-          path: ios-release
-
-      - name: Upload IPA and confirm Apple processing
-        shell: bash
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: |
-          key_dir="$RUNNER_TEMP/private_keys"
-          mkdir -p "$key_dir"
-          (umask 077 && printf '%s' "$APPLE_API_KEY_P8" | base64 -d > "$key_dir/AuthKey_${APPLE_API_KEY_ID}.p8")
-          export APPLE_API_KEY_PATH="$key_dir/AuthKey_${APPLE_API_KEY_ID}.p8"
-          mise exec node -- node scripts/publish-ios-release.ts ios-release
-
-      - name: Remove App Store Connect API key
-        if: ${{ always() }}
-        shell: bash
-        run: rm -rf "$RUNNER_TEMP/private_keys"

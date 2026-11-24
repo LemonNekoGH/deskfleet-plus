@@ -44,17 +44,13 @@ test("Android downloads select the current release APK and leave missing assets 
   assert.equal(findAndroidDownload({ ...release, version: "0.3.0" }), undefined)
 })
 
-test("release verification requires installers, packaging archives, and update metadata for stable and prerelease builds", context => {
+test("release verification requires the Android APK and allows an optional signed iOS IPA", context => {
   const yaml = readFileSync(join(import.meta.dirname, "../.github/workflows/publish.yml"), "utf8").replace(/\r\n/g, "\n")
   const block = yaml.match(/^      - name: Verify release assets\n[\s\S]*?^        run: \|\n((?:          .*\n)+)/m)?.[1]
   assert.ok(block, "Missing release asset verification step")
   const directory = mkdtempSync(join(tmpdir(), "deskfleet-release-assets-"))
   context.after(() => rmSync(directory, { recursive: true, force: true }))
   mkdirSync(join(directory, "release-assets"))
-  const updaterAssets = [
-    "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml",
-    "deskfleet-0.2.0-mac-arm64.zip.blockmap", "deskfleet-0.2.0-mac-x64.zip.blockmap", "deskfleet-0.2.0-win-x64.exe.blockmap",
-  ]
   const bash = process.platform === "win32"
     ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
     : "bash"
@@ -62,34 +58,27 @@ test("release verification requires installers, packaging archives, and update m
     cwd: directory, env: { ...process.env, VERSION: version }, encoding: "utf8",
   })
   for (const version of [release.version, "0.2.0-beta.1"]) {
-    const names = [...assetNames, ...updaterAssets].map(name => name.replace("0.2.0", version))
-    for (const name of names) writeFileSync(join(directory, "release-assets", name), "fixture")
-    const result = verify(version)
-    assert.ifError(result.error)
-    assert.equal(result.status, 0, result.stderr)
-    for (const required of [
-      `deskfleet-${version}-linux-x86_64.AppImage`, "latest-linux-arm64.yml", `deskfleet-${version}-mac-arm64.zip.blockmap`,
-      `deskfleet-${version}-mac-x64.dmg`, `deskfleet-${version}-mac-x64.zip`, `deskfleet-${version}-mac-x64.zip.blockmap`,
-      `deskfleet-${version}-linux-amd64.deb`, `deskfleet-${version}-linux-aarch64.rpm`,
-      `deskfleet-${version}-linux-x64.tar.gz`, `deskfleet-${version}-linux-arm64.tar.gz`, "deskfleet-nix.tar.gz",
-      `deskfleet-${version}-android-arm64.apk`, "deskfleet-macos-x64.tar.gz",
-    ]) {
-      const path = join(directory, "release-assets", required)
-      unlinkSync(path)
-      assert.notEqual(verify(version).status, 0, `Missing ${required} must prevent publication`)
-      writeFileSync(path, "")
-      assert.notEqual(verify(version).status, 0, `Empty ${required} must prevent publication`)
-      writeFileSync(path, "fixture")
-    }
-    for (const arch of ["x64", "arm64"]) {
-      const dmgBlockmap = join(directory, "release-assets", `deskfleet-${version}-mac-${arch}.dmg.blockmap`)
-      writeFileSync(dmgBlockmap, "fixture")
-      assert.equal(verify(version).status, 0, "A DMG blockmap may accompany the ZIP update target")
-      writeFileSync(dmgBlockmap, "")
-      assert.notEqual(verify(version).status, 0, "A published DMG blockmap must be nonempty")
-      unlinkSync(dmgBlockmap)
-    }
-    for (const name of names) unlinkSync(join(directory, "release-assets", name))
+    const apk = join(directory, "release-assets", `deskfleet-${version}-android-arm64.apk`)
+    const ipa = join(directory, "release-assets", `deskfleet-${version}-ios-arm64.ipa`)
+    assert.notEqual(verify(version).status, 0, "Missing APK must prevent publication")
+    writeFileSync(apk, "")
+    assert.notEqual(verify(version).status, 0, "Empty APK must prevent publication")
+    writeFileSync(apk, "fixture")
+    const apkOnly = verify(version)
+    assert.ifError(apkOnly.error)
+    assert.equal(apkOnly.status, 0, apkOnly.stderr)
+    writeFileSync(ipa, "fixture")
+    const withIpa = verify(version)
+    assert.ifError(withIpa.error)
+    assert.equal(withIpa.status, 0, withIpa.stderr)
+    writeFileSync(ipa, "")
+    assert.notEqual(verify(version).status, 0, "Empty IPA must prevent publication")
+    unlinkSync(ipa)
+    const stray = join(directory, "release-assets", "unexpected.txt")
+    writeFileSync(stray, "fixture")
+    assert.notEqual(verify(version).status, 0, "Unexpected extra assets must fail verification")
+    unlinkSync(stray)
+    unlinkSync(apk)
   }
 })
 

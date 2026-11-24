@@ -88,3 +88,5 @@ Android アプリと Web クライアントには Termux デーモン向けの�
 1. サードパーティ製の **`DeskFleet Plus`** APK（`moe.remon.deskfleet.plus`、公式版 `ai.yetanother.deskfleet` とは別アプリ）をインストールします。
 2. アプリにログインし、**マシンを追加 → このコンピューター** を開いて登録を確定します。
 3. アプリのプライベートサンドボックス内に Debian `arm64` `proot` コンテナを自動構築し、同梱の `deskfleet-daemon` と `scrcpy-server` を配置して Wake lock 付きのフォアグラウンドサービスとして起動したうえでチーム登録まで自動的に完了します（Root や手動のコマンド操作は不要です）。
+
+アップストリームとの詳細な比較、Android ワイヤレス ADB 設定、および iOS 内蔵 Linux VM の手順については、[DeskFleet Plus（モバイル内蔵デーモン）](./deskfleet-plus) を参照してください。

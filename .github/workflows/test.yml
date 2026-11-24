@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       docs_only:
-        description: Keep static checks and skip runtime tests for classified documentation changes.
+        description: Keep preflight checks and skip mobile tests for classified documentation changes.
         type: boolean
         required: false
         default: false
@@ -14,24 +14,19 @@ on:
         required: false
         default: false
       draft_pr:
-        description: Keep static checks and skip runtime tests for draft pull requests.
+        description: Keep preflight checks and skip mobile tests for draft pull requests.
         type: boolean
         required: false
         default: false
       all_platforms:
-        description: Run tests on full cross-platform matrix (Linux, macOS, Windows). When false, tests run on Linux x64 only.
-        type: boolean
-        required: false
-        default: true
-      run_backend:
-        description: Run PostgreSQL, Valkey, coturn, and remote backend integration tests.
+        description: Run iOS Simulator tests in addition to Android tests.
         type: boolean
         required: false
         default: true
   workflow_call:
     inputs:
       docs_only:
-        description: Keep static checks and skip runtime tests for classified documentation changes.
+        description: Keep preflight checks and skip mobile tests for classified documentation changes.
         type: boolean
         required: false
         default: false
@@ -41,17 +36,12 @@ on:
         required: false
         default: false
       draft_pr:
-        description: Keep static checks and skip runtime tests for draft pull requests.
+        description: Keep preflight checks and skip mobile tests for draft pull requests.
         type: boolean
         required: false
         default: false
       all_platforms:
-        description: Run tests on full cross-platform matrix (Linux, macOS, Windows). When false, tests run on Linux x64 only.
-        type: boolean
-        required: false
-        default: true
-      run_backend:
-        description: Run PostgreSQL, Valkey, coturn, and remote backend integration tests.
+        description: Run iOS Simulator tests in addition to Android tests.
         type: boolean
         required: false
         default: true
@@ -61,7 +51,7 @@ permissions:
 
 jobs:
   # Checks that need no Rust compilation. They fail fast on formatting,
-  # dependency, script, and Web type errors before the platform tests start.
+  # dependency, script, and Web type errors before the mobile tests start.
   preflight:
     name: Preflight
     runs-on: ubuntu-26.04
@@ -78,98 +68,6 @@ jobs:
 
       - name: Run preflight checks
         run: mise run ci:preflight
-
-  # Clippy, native type checks, and bundle builds run beside the platform
-  # tests instead of ahead of them.
-  static:
-    name: Static checks
-    if: ${{ !inputs.specs_only }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up build environment
-        id: setup_build
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ github.token }}
-          rust-cache: static
-
-      - name: Run static checks
-        run: mise run ci:check:static
-
-      - name: Upload the product website for GitHub Pages
-        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs/.vitepress/dist
-
-  checks:
-    name: Tests (${{ matrix.name }})
-    needs: preflight
-    if: >-
-      ${{ !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
-          (github.event_name == 'pull_request' ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main'))) }}
-    runs-on: ${{ matrix.os }}
-    # Leave room for cold Windows Rust builds and the cache upload.
-    timeout-minutes: ${{ startsWith(matrix.os, 'windows-') && 45 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(inputs.all_platforms && '[{"name":"Linux x64","os":"ubuntu-26.04","test-task":"test"},{"name":"Windows x64","os":"windows-latest","test-task":"ci:test:platform"},{"name":"macOS arm64","os":"macos-latest","test-task":"ci:test:platform"}]' || '[{"name":"Linux x64","os":"ubuntu-26.04","test-task":"test"}]') }}
-    steps:
-      # Rust tests can exhaust the hosted image's free disk space. This job
-      # does not build Android; reclaim its SDK before restoring Cargo outputs.
-      - name: Free unused Android SDK space
-        if: runner.os == 'Linux'
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android
-          df -h /
-
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Set up build environment
-        id: setup_build
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ github.token }}
-          rust-cache: test
-
-      - name: Run tests
-        run: mise run ${{ matrix.test-task }}
-
-      - name: Verify DeepSeek Harness on Electron
-        run: mise run desktop:smoke-dsh
-
-      - name: Verify Electron backend proxy transport (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mise exec -- pnpm --filter @deskfleet/desktop exec install-electron
-          electron_sandbox=$(mise exec -- pnpm --filter @deskfleet/desktop exec node -p 'require.resolve("electron/dist/chrome-sandbox")')
-          sudo chown root:root "$electron_sandbox"
-          sudo chmod 4755 "$electron_sandbox"
-          xvfb-run -a mise run desktop:smoke-proxy
-
-      - name: Verify Electron backend proxy transport (Windows and macOS)
-        if: runner.os != 'Linux'
-        run: mise run desktop:smoke-proxy
-
-      # Tests close their last X client between cases; keep Xvfb from resetting
-      # while the next case opens its connection.
-      - name: Verify X11 capture and input
-        if: runner.os == 'Linux'
-        run: >-
-          xvfb-run -a --server-args="-screen 0 1280x1024x24 -noreset"
-          env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11
-          mise exec -- cargo test -p deskfleet-x11 -p deskfleet-capture
-          --locked x11_ -- --ignored --test-threads=1
 
   android:
     name: Tests (Android)
@@ -217,104 +115,3 @@ jobs:
 
       - name: Build and verify iOS Simulator app
         run: mise run ios:test
-
-  backend:
-    name: PostgreSQL and remote backend
-    needs: preflight
-    if: >-
-      ${{ inputs.run_backend && !inputs.specs_only && !inputs.draft_pr && !(inputs.docs_only &&
-          (github.event_name == 'pull_request' ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main'))) }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:18.7@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
-        env:
-          POSTGRES_USER: deskfleet_test
-          POSTGRES_PASSWORD: deskfleet_test
-          POSTGRES_DB: deskfleet_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U deskfleet_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      valkey:
-        image: valkey/valkey:9.2.0@sha256:1c2b25b09f354c66fe994733acdf12fcfd4bdf6f3bd92b88a93a70378d884056
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgres://deskfleet_test:deskfleet_test@127.0.0.1:5432/deskfleet_test
-      TEST_REDIS_URL: redis://127.0.0.1:6379/
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Validate development Compose configuration
-        run: docker compose config --quiet
-
-      - name: Set up build environment
-        id: setup_build
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ github.token }}
-          # Start from the Linux test target directory, which shares most
-          # dependencies with the backend packages, but leave writing it to Tests.
-          rust-cache: test
-          rust-cache-save: "false"
-
-      - name: Run PostgreSQL and Valkey integration tests
-        run: mise run backend:test
-
-      - name: Run authenticated remote workflow
-        run: mise run backend:smoke
-
-      - name: Configure Electron sandbox
-        run: |
-          mise exec -- pnpm --filter @deskfleet/desktop exec install-electron
-          electron_sandbox=$(mise exec -- pnpm --filter @deskfleet/desktop exec node -p 'require.resolve("electron/dist/chrome-sandbox")')
-          sudo chown root:root "$electron_sandbox"
-          sudo chmod 4755 "$electron_sandbox"
-
-      - name: Run the built Web and Electron clients
-        run: xvfb-run -a mise run backend:smoke-clients
-
-      - name: Verify native PTYs in the Electron main process
-        run: xvfb-run -a mise run desktop:smoke-native-terminal
-
-      - name: Start the test TURN relay
-        run: >-
-          docker run --detach --name deskfleet-turn-test
-          -p 127.0.0.1:3478:3478/udp -p 127.0.0.1:3478:3478/tcp
-          -p 127.0.0.1:49160-49180:49160-49180/udp
-          coturn/coturn:4.18.0@sha256:bbefd3e1fdfdc0d58770fe01b581fd8b00d9f3a5580d00acb77cf719a6bc78e3
-          --no-cli --no-tls --fingerprint --use-auth-secret
-          --static-auth-secret=deskfleet-test-relay-secret --realm=deskfleet.test
-          --listening-port=3478 --min-port=49160 --max-port=49180
-          --external-ip=127.0.0.1 --allow-loopback-peers --log-file=stdout
-
-      - name: Verify the remote workflow over TURN only
-        env:
-          DESKFLEET_TURN_URLS: turn:127.0.0.1:3478?transport=udp
-          DESKFLEET_TURN_SECRET: deskfleet-test-relay-secret
-          DESKFLEET_SMOKE_RELAY_ONLY: "1"
-        run: mise run backend:smoke
-
-      - name: Verify Web and Electron over TURN only
-        env:
-          DESKFLEET_TURN_URLS: turn:127.0.0.1:3478?transport=udp
-          DESKFLEET_TURN_SECRET: deskfleet-test-relay-secret
-          DESKFLEET_SMOKE_FORCE_RELAY: "1"
-        run: xvfb-run -a mise run backend:smoke-clients
-
-      - name: Stop the test relay
-        if: ${{ always() }}
-        run: docker rm --force deskfleet-turn-test || true

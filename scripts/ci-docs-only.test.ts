@@ -4,7 +4,6 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test, { type TestContext } from "node:test"
-import { runInNewContext } from "node:vm"
 import {
   classifyChanges,
   classifyDocumentation,
@@ -299,13 +298,12 @@ test("spec models skip product suites and any other file restores them", () => {
   assert.equal(isSpecsOnlyDiff(record("specs/grant_lifecycle.qnt", "100644", "120000")), false)
 })
 
-test("manual Test workflow_dispatch declares full matrix and backend defaults", () => {
+test("manual Test workflow_dispatch declares full mobile matrix defaults", () => {
   const yaml = workflowYaml("../.github/workflows/test.yml")
   const dispatch = yaml.match(/^on:\n([\s\S]*?)^permissions:/m)?.[1]
   assert.ok(dispatch, "Missing workflow on: block")
   assert.match(dispatch, /workflow_dispatch:\n(?: {4}.+\n)*? {4}inputs:/)
   assert.match(dispatch, /workflow_dispatch:[\s\S]*?all_platforms:[\s\S]*?default:\s*true/)
-  assert.match(dispatch, /workflow_dispatch:[\s\S]*?run_backend:[\s\S]*?default:\s*true/)
   assert.match(dispatch, /workflow_dispatch:[\s\S]*?specs_only:[\s\S]*?default:\s*false/)
 })
 
@@ -341,54 +339,24 @@ function workflowScript(job: string): string {
   return block.replace(/^ {10}/gm, "")
 }
 
-test("packaging jobs run independently of Test and only Linux packages waits on Build", () => {
+test("mobile build runs independently of Test and omits desktop packaging jobs", () => {
   const yaml = workflowYaml("../.github/workflows/ci.yml")
-  for (const name of ["build", "nix_server"]) {
-    const job = yaml.match(new RegExp(`^  ${name}:[\\s\\S]*?(?=^  [a-z])`, "m"))?.[0]
-    assert.ok(job, `Missing ${name} job`)
-    assert.match(job, /needs:\s*changes\b/)
-    assert.doesNotMatch(job, /needs:\s*\[[^\]]*test/)
-    assert.doesNotMatch(job, /needs\.test\.result/)
-    assert.match(job, /needs\.changes\.outputs\.run_build\s*==\s*'true'/)
-  }
-  const linuxPackages = yaml.match(/^  linux_packages:[\s\S]*?(?=^  [a-z])/m)?.[0]
-  assert.ok(linuxPackages, "Missing linux_packages job")
-  assert.match(linuxPackages, /needs:\s*\[changes,\s*build\]/)
-  assert.doesNotMatch(linuxPackages, /needs\.test\.result/)
-  assert.match(linuxPackages, /needs\.build\.result\s*==\s*'success'/)
-  assert.match(linuxPackages, /needs\.changes\.outputs\.run_build\s*==\s*'true'/)
+  const build = yaml.match(/^  build:[\s\S]*?(?=^  [a-z])/m)?.[0]
+  assert.ok(build, "Missing build job")
+  assert.match(build, /needs:\s*changes\b/)
+  assert.doesNotMatch(build, /needs:\s*\[[^\]]*test/)
+  assert.doesNotMatch(build, /needs\.test\.result/)
+  assert.match(build, /needs\.changes\.outputs\.run_build\s*==\s*'true'/)
+  assert.doesNotMatch(yaml, /^  (?:nix_server|linux_packages|deploy-pages):/m)
 })
 
-test("website deployment skips spec-only runs without an uploaded artifact", () => {
-  const yaml = workflowYaml("../.github/workflows/ci.yml")
-  const job = yaml.match(/^  deploy-pages:[\s\S]*?(?=^  [a-z]|(?![\s\S]))/m)?.[0]
-  assert.ok(job, "Missing deploy-pages job")
-  assert.match(job, /needs:\s*\[changes,\s*gate,\s*test\]/)
-  const condition = job.match(/^    if:\s*\$\{\{\s*(.*?)\s*\}\}$/m)?.[1]
-  assert.ok(condition, "Missing deploy-pages condition")
-  const deploys = (specsOnly: string, eventName = "push", gate = "success") => runInNewContext(condition, {
-    cancelled: () => false,
-    needs: { changes: { outputs: { specs_only: specsOnly } }, gate: { result: gate } },
-    github: { ref: "refs/heads/main", event_name: eventName },
-  })
-  assert.equal(deploys("true"), false)
-  assert.equal(deploys("false"), true)
-  assert.equal(deploys("false", "workflow_dispatch"), true)
-  assert.equal(deploys("false", "schedule"), false)
-  assert.equal(deploys("false", "push", "failure"), false)
-})
-
-test("failed classification keeps the full Test matrix and backend jobs", () => {
+test("failed classification keeps the full mobile Test matrix", () => {
   const yaml = workflowYaml("../.github/workflows/ci.yml")
   const test = yaml.match(/^  test:[\s\S]*?(?=^  [a-z]|\z)/m)?.[0]
   assert.ok(test, "Missing Test job")
   assert.match(
     test,
     /all_platforms:\s*\$\{\{\s*needs\.changes\.result\s*!=\s*'success'\s*\|\|\s*needs\.changes\.outputs\.all_platforms\s*==\s*'true'\s*\}\}/,
-  )
-  assert.match(
-    test,
-    /run_backend:\s*\$\{\{\s*needs\.changes\.result\s*!=\s*'success'\s*\|\|\s*needs\.changes\.outputs\.run_backend\s*==\s*'true'\s*\}\}/,
   )
   assert.match(
     test,
@@ -408,35 +376,31 @@ test("actual Gate accepts only successful required jobs and explicitly allowed s
       CHANGES_RESULT: "success",
       TEST_RESULT: "success",
       BUILD_RESULT: "success",
-      NIX_SERVER_RESULT: "success",
-      LINUX_PACKAGES_RESULT: "success",
       DOCS_ONLY: "false",
       RUN_BUILD: "true",
       ...state,
     },
   }).status === 0
   assert.equal(expected({}), true, "all required jobs succeed")
-  for (const job of ["BUILD_RESULT", "NIX_SERVER_RESULT", "LINUX_PACKAGES_RESULT"]) {
-    for (const state of ["failure", "cancelled", "skipped"]) {
-      assert.equal(expected({ [job]: state }), false, `${job}=${state}`)
-      assert.equal(expected({ [job]: state, DOCS_ONLY: "true" }), false, `${job}=${state} with docs-only skip`)
-      assert.equal(expected({ [job]: state, RUN_BUILD: "false" }), false, `${job}=${state} with build skip`)
-    }
+  for (const state of ["failure", "cancelled", "skipped"]) {
+    assert.equal(expected({ BUILD_RESULT: state }), false, `BUILD_RESULT=${state}`)
+    assert.equal(expected({ BUILD_RESULT: state, DOCS_ONLY: "true" }), false, `BUILD_RESULT=${state} with docs-only skip`)
+    assert.equal(expected({ BUILD_RESULT: state, RUN_BUILD: "false" }), false, `BUILD_RESULT=${state} with build skip`)
   }
   for (const state of ["failure", "cancelled", "skipped"]) {
     assert.equal(expected({ CHANGES_RESULT: state }), false, `changes=${state}`)
     assert.equal(expected({ TEST_RESULT: state }), false, `test=${state} with packaging success`)
-    assert.equal(expected({ TEST_RESULT: state, BUILD_RESULT: "skipped", NIX_SERVER_RESULT: "skipped", LINUX_PACKAGES_RESULT: "skipped" }), false, `test=${state}`)
+    assert.equal(expected({ TEST_RESULT: state, BUILD_RESULT: "skipped" }), false, `test=${state}`)
   }
   for (const state of [{ DOCS_ONLY: "true" }, { RUN_BUILD: "false" }]) {
-    assert.equal(expected({ ...state, BUILD_RESULT: "skipped", NIX_SERVER_RESULT: "skipped", LINUX_PACKAGES_RESULT: "skipped" }), true,
+    assert.equal(expected({ ...state, BUILD_RESULT: "skipped" }), true,
       `allowed skip: ${JSON.stringify(state)}`)
-    assert.equal(expected({ ...state, BUILD_RESULT: "success", NIX_SERVER_RESULT: "skipped", LINUX_PACKAGES_RESULT: "skipped" }), false,
+    assert.equal(expected({ ...state, BUILD_RESULT: "success" }), false,
       `unexpected build: ${JSON.stringify(state)}`)
   }
   // Test failure no longer forces packaging into the skipped expectation.
   assert.equal(
-    expected({ TEST_RESULT: "failure", BUILD_RESULT: "success", NIX_SERVER_RESULT: "success", LINUX_PACKAGES_RESULT: "success" }),
+    expected({ TEST_RESULT: "failure", BUILD_RESULT: "success" }),
     false,
     "independent packaging success cannot hide a Test failure",
   )

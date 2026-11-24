@@ -3,6 +3,65 @@
 Engineering documentation lives in `agents/docs/`; `docs/` is reserved for the
 product website and user manual.
 
+## DeskFleet Plus (Mobile Fork Scope)
+
+This repository (`LemonNekoGH/deskfleet-plus`, package/bundle ID `moe.remon.deskfleet.plus`)
+is a mobile-focused fork of upstream `yet-another-ai/deskfleet` (`ai.yetanother.deskfleet`).
+Read [DeskFleet Plus architecture and maintenance](agents/docs/deskfleet-plus.md) before
+changing mobile daemon runtimes, mobile CI/release workflows, or syncing upstream.
+
+- **Core purpose**: Allow Android and iOS clients to host a full Linux `deskfleet-daemon`
+  inside the mobile app sandbox and enroll themselves as managed Team machines, while
+  keeping desktop, central backend, and wire protocol aligned with upstream.
+- **Mobile runtime ownership**:
+  - **Shared Capacitor bridge & UI**: `packages/capacitor-bridge/src/local-daemon.ts`
+    and `wireless-adb.ts` expose unified local enrollment, streaming setup logs, CLI-backed
+    host settings (`deskfleet-daemon settings`), and Wireless ADB APIs to `apps/web` and
+    `packages/components`.
+  - **Android**: `packages/capacitor-bridge/android/` (`ProotDaemonManager.kt`,
+    `LocalDaemonService.kt`, `WirelessAdbManager.kt`, `WirelessAdbController.kt`) plus
+    `scripts/build-android-viewer.ts` bundle unprivileged Termux `proot`, `scrcpy-server`,
+    and upstream's `deskfleet-daemon` `linux-arm64` binary.
+  - **iOS**: `packages/capacitor-bridge/ios/` (`RvvmDaemonManager.swift`, `RvvmHostBridge.c`,
+    `RvvmOnDevicePairing.swift`, `RvvmRamDonor.m`, `rppairing/`, `rvvm/ios-jit.patch`),
+    `apps/web/ios/App/DeskFleetJITHelper/`, `scripts/build-ios-viewer.ts`, and
+    `scripts/build-ios-riscv64-guest.ts` run a pure-JIT `librvvm` RISC-V 64 Linux guest
+    with Box64 (`packages/agents/antigravity` & `packages/agents/core` include `linux/riscv64`
+    Box64 and timeout adaptations).
+- **Mobile-only CI & releases**: `.github/workflows/ci.yml`, `test.yml`, `build.yml`, and
+  `publish.yml` are intentionally pruned to `preflight` + Android/iOS tests, mobile builds,
+  and GitHub Draft Releases (Android APK + optional signed iOS IPA). Desktop installers,
+  Linux DEB/RPM/Nix/AUR, Docker images, Google Play, and TestFlight publishing belong to
+  upstream. `.github/workflows/ios-guest-riscv64.yml` builds and publishes the pre-baked
+  iOS `riscv64` guest image, and is automatically invoked by `publish.yml` on stable tags.
+- **Upstream-aligned release cadence**: Cut a DeskFleet Plus stable release `vX.Y.Z`
+  whenever upstream `yet-another-ai/deskfleet` publishes a formal stable release `vX.Y.Z`
+  with its `deskfleet-linux-arm64.tar.gz` daemon archive available. Agents and scheduled
+  sync tasks can check readiness with `node scripts/check-upstream-release.ts --check-latest`;
+  `publish.yml` enforces `--require-tag` before building, refreshes `ios-guest-riscv64` on
+  stable tags, and creates a Draft Release. When editing or publishing the GitHub Release
+  changelog, always separate the notes under two top-level headings: `# DeskFleet Plus`
+  (fork-only mobile changes) and `# Upstream` (upstream changes included in `vX.Y.Z`).
+- **Upstream sync & merge exclusions** (see the full playbook in
+  [agents/docs/deskfleet-plus.md](agents/docs/deskfleet-plus.md#upstream-merge-policy--conflict-playbook)):
+  - **Keep deleted (never restore from upstream)**: `.github/workflows/nix.yml`,
+    `nix-server.yml`, `aur.yml`, `aur-publish.yml`, `linux-packages.yml`, and any new
+    upstream workflow solely for desktop, Linux package, container, or app-store publishing.
+  - **Do not overwrite with upstream (keep fork-owned)**: `README.md` (keep DeskFleet Plus's
+    mobile README; drop upstream desktop/badges/install copy), and desktop/server/store CI
+    jobs (`package`, `static`, `checks`, `backend`, `deploy-pages`, `image`,
+    `super_agent_image`, `google_play`, `testflight`) inside `.github/workflows/{ci,test,build,publish}.yml`
+    plus their corresponding workflow assertions in `scripts/{ci-docs-only,ci-ios-release,ci-release-build,home-downloads,package-linux-release,package-nix-release}.test.ts`
+    (only port shared tooling/Android/iOS improvements from upstream CI changes).
+  - **Always preserve during conflicts**: `moe.remon.deskfleet.plus` /
+    `group.moe.remon.deskfleet.plus` / `DeskFleet Plus` branding, default mobile server URL
+    (`https://deskfleet.yetanother.ai`), `Cargo.toml` `exclude` for `rppairing`,
+    `linux/riscv64` Box64 agent adaptations, embedded Android/iOS daemon & Wireless ADB code,
+    mobile local-daemon UI hooks, `THIRD_PARTY_NOTICES.md`, and DeskFleet Plus docs.
+  - **Keep diffs outside fork-owned files minimal**: accept upstream changes directly for
+    `apps/server`, `apps/desktop`, `crates`, `packages/protocol`, `packages/mcp`, `specs`,
+    `nix`, and `packaging` so future merges from `upstream/main` stay low-conflict.
+
 ## Architecture
 
 - deskfleet manages a team's AI agents and working environments across machines.

@@ -30,7 +30,6 @@ jobs:
       specs_only: ${{ steps.classify.outputs.specs_only }}
       run_build: ${{ steps.classify.outputs.run_build }}
       all_platforms: ${{ steps.classify.outputs.all_platforms }}
-      run_backend: ${{ steps.classify.outputs.run_backend }}
     steps:
       - name: Check out complete history
         uses: actions/checkout@v7
@@ -48,14 +47,12 @@ jobs:
           echo "specs_only=false" >> "$GITHUB_OUTPUT"
           echo "run_build=true" >> "$GITHUB_OUTPUT"
           echo "all_platforms=true" >> "$GITHUB_OUTPUT"
-          echo "run_backend=true" >> "$GITHUB_OUTPUT"
           if ! node scripts/ci-docs-only.ts; then
             echo "::warning::Classification could not run; running full CI."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             echo "specs_only=false" >> "$GITHUB_OUTPUT"
             echo "run_build=true" >> "$GITHUB_OUTPUT"
             echo "all_platforms=true" >> "$GITHUB_OUTPUT"
-            echo "run_backend=true" >> "$GITHUB_OUTPUT"
           fi
 
   test:
@@ -69,51 +66,22 @@ jobs:
       draft_pr: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == true }}
       # Classification failure must expand coverage (same fail-safe direction as docs_only=false).
       all_platforms: ${{ needs.changes.result != 'success' || needs.changes.outputs.all_platforms == 'true' }}
-      run_backend: ${{ needs.changes.result != 'success' || needs.changes.outputs.run_backend == 'true' }}
     permissions:
       contents: read
 
   build:
     name: Build
-    # Run in parallel with Test. #390 staged Build after Test; that serialization
-    # is rolled back so packaging smoke can overlap runtime tests. Classification
-    # still skips Build when docs-only or when packaging paths are unchanged.
+    # Run mobile packaging in parallel with Test when classification requests a build.
     needs: changes
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_build == 'true' }}
     uses: ./.github/workflows/build.yml
-    with:
-      smoke_build: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
-    permissions:
-      contents: read
-
-  nix_server:
-    name: Nix server
-    # Independent of Test (same packaging gate as Build). Source image build does
-    # not consume Test artifacts.
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_build == 'true' }}
-    uses: ./.github/workflows/nix-server.yml
-    with:
-      smoke_build: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
-    permissions:
-      contents: read
-
-  linux_packages:
-    name: Linux packages
-    # True dependency: downloads deskfleet-desktop-* from Build. Does not wait on
-    # Test; once Build finishes, DEB/RPM validation can overlap remaining tests.
-    needs: [changes, build]
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.build.result == 'success' && needs.changes.outputs.run_build == 'true' }}
-    uses: ./.github/workflows/linux-packages.yml
-    with:
-      smoke_build: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
     permissions:
       contents: read
 
   gate:
     name: Gate
     if: ${{ always() }}
-    needs: [changes, test, build, nix_server, linux_packages]
+    needs: [changes, test, build]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
@@ -125,8 +93,6 @@ jobs:
           RUN_BUILD: ${{ needs.changes.outputs.run_build }}
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build.result }}
-          NIX_SERVER_RESULT: ${{ needs.nix_server.result }}
-          LINUX_PACKAGES_RESULT: ${{ needs.linux_packages.result }}
         run: |
           expected_build=success
           # Packaging skip is classification-driven only. Test failure must not
@@ -134,8 +100,8 @@ jobs:
           if [[ "$CHANGES_RESULT" == "success" && ("$DOCS_ONLY" == "true" || "$RUN_BUILD" == "false") ]]; then
             expected_build=skipped
           fi
-          if [[ "$CHANGES_RESULT" != "success" || "$TEST_RESULT" != "success" || "$BUILD_RESULT" != "$expected_build" || "$NIX_SERVER_RESULT" != "$expected_build" || "$LINUX_PACKAGES_RESULT" != "$expected_build" ]]; then
-            echo "::error::CI did not pass (Changes: $CHANGES_RESULT, docs-only: $DOCS_ONLY, run-build: $RUN_BUILD, Test: $TEST_RESULT, Build: $BUILD_RESULT, Nix server: $NIX_SERVER_RESULT, Linux packages: $LINUX_PACKAGES_RESULT)."
+          if [[ "$CHANGES_RESULT" != "success" || "$TEST_RESULT" != "success" || "$BUILD_RESULT" != "$expected_build" ]]; then
+            echo "::error::CI did not pass (Changes: $CHANGES_RESULT, docs-only: $DOCS_ONLY, run-build: $RUN_BUILD, Test: $TEST_RESULT, Build: $BUILD_RESULT)."
             exit 1
           fi
 
@@ -165,25 +131,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: mise exec node -- node scripts/ci-prune-caches.ts
-
-  deploy-pages:
-    name: Deploy website
-    needs: [changes, gate, test]
-    # Spec-only runs skip the static job that uploads the website artifact.
-    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.changes.outputs.specs_only != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'schedule' }}
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5

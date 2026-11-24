@@ -88,3 +88,5 @@ Run `./deskfleet-daemon settings --help` or see [Configure host settings](./gett
 1. Install the third-party **`DeskFleet Plus`** APK (`moe.remon.deskfleet.plus`, separate from the official `ai.yetanother.deskfleet` app).
 2. Sign in inside the app, open **Add machine → This computer**, and confirm enrollment.
 3. The app automatically initializes a Debian `arm64` `proot` container inside its private sandbox, installs the bundled `deskfleet-daemon` and `scrcpy-server`, runs the daemon in a foreground service with wake lock, and enrolls the device with your Team without root or manual CLI steps.
+
+For the full comparison with upstream, Android Wireless ADB setup, and iOS embedded Linux VM instructions, see [DeskFleet Plus (Mobile Local Daemon)](./deskfleet-plus).

@@ -97,24 +97,6 @@ test("package metadata renders complete control and spec files", () => {
   assert.doesNotMatch(spec, /@[A-Z_]+@/u)
 })
 
-test("release publication verifies every generated package asset", () => {
-  const yaml = readFileSync(join(repository, ".github/workflows/publish.yml"), "utf8")
-  for (const format of ["deb", "rpm"] as const) {
-    for (const architecture of ["x64", "arm64"] as const) {
-      assert.ok(yaml.includes(`"${linuxPackageFilename("$VERSION", format, architecture)}"`),
-        `${format} ${architecture} must be a required release asset`)
-    }
-  }
-})
-
-test("linux package validation enables Chromium user namespaces before GUI smoke", () => {
-  const yaml = readFileSync(join(repository, ".github/workflows/linux-packages.yml"), "utf8")
-  const enable = yaml.indexOf("kernel.apparmor_restrict_unprivileged_userns=0")
-  const smoke = yaml.indexOf("scripts/check-linux-release.ts")
-  assert.ok(enable >= 0, "linux-packages.yml must disable AppArmor userns restriction")
-  assert.ok(smoke > enable, "AppArmor userns must be enabled before the package smoke")
-})
-
 test("builds installable deb and rpm packages from desktop archives", { skip: !buildable }, async context => {
   const architecture = process.arch === "arm64" ? "arm64" : "x64"
   const debArchitecture = architecture === "x64" ? "amd64" : "arm64"
