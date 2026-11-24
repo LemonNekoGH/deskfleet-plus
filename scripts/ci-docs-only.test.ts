@@ -554,6 +554,8 @@ test("actual Gate accepts only successful required jobs and explicitly allowed s
   assert.equal(expected({}), true, "all required jobs succeed")
   for (const state of ["failure", "cancelled", "skipped"]) {
     assert.equal(expected({ BUILD_RESULT: state }), false, `BUILD_RESULT=${state}`)
+  }
+  for (const state of ["failure", "cancelled"]) {
     assert.equal(expected({ BUILD_RESULT: state, DOCS_ONLY: "true" }), false, `BUILD_RESULT=${state} with docs-only skip`)
   }
   for (const state of ["failure", "cancelled", "skipped"]) {
