@@ -675,88 +675,118 @@ export function stageRvvmGuestFirmware(
   return staged
 }
 
-export function buildRppairingXcframework(repoRoot: string, frameworksDir: string): string {
+function ensureRustTargetsInstalled(repoRoot: string, targets: readonly IosViewerTarget[]): void {
+  const installed = execFileSync("rustup", ["target", "list", "--installed"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  })
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  const missing = targets.filter(target => !installed.includes(target))
+  if (missing.length > 0) {
+    execFileSync("rustup", ["target", "add", ...missing], {
+      cwd: repoRoot,
+      stdio: "inherit",
+    })
+  }
+}
+
+export function buildRppairingXcframework(
+  repoRoot: string,
+  frameworksDir: string,
+  targets: readonly IosViewerTarget[] = ALL_IOS_VIEWER_TARGETS,
+): string {
   const rppairingDir = join(repoRoot, "packages/capacitor-bridge/ios/rppairing")
   const rppairingTargetDir = join(repoRoot, "target/rppairing")
   const xcframeworkDir = join(frameworksDir, "IshPlusRPPairing.xcframework")
+  const includeDevice = targets.includes("aarch64-apple-ios")
+  const includeSim = targets.includes("aarch64-apple-ios-sim")
   mkdirSync(frameworksDir, { recursive: true })
   rmSync(xcframeworkDir, { recursive: true, force: true })
 
-  execFileSync(
-    "cargo",
-    [
-      "build",
-      "--manifest-path",
-      join(rppairingDir, "Cargo.toml"),
-      "--target",
-      "aarch64-apple-ios",
-      "--release",
-      "--locked",
-      "--target-dir",
-      rppairingTargetDir,
-    ],
-    {
-      cwd: repoRoot,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        ...iosCargoTargetEnv("aarch64-apple-ios"),
-        IPHONEOS_DEPLOYMENT_TARGET: "16.0",
-      },
-    },
-  )
-
-  const deviceLib = join(rppairingTargetDir, "aarch64-apple-ios/release/libishplus_rppairing.a")
   const simTemp = mkdtempSync(join(tmpdir(), "deskfleet-rppairing-sim-"))
   try {
-    const simObj = join(simTemp, "simulator.o")
-    const simLib = join(simTemp, "libishplus_rppairing.a")
     const headerSrc = join(rppairingDir, "include/ishplus_rppairing.h")
+    const frameworkArgs: string[] = []
 
-    execFileSync(
-      "xcrun",
-      [
-        "--sdk",
-        "iphonesimulator",
-        "clang",
-        "-c",
-        "-target",
-        "arm64-apple-ios16.0-simulator",
-        join(rppairingDir, "simulator.c"),
-        "-o",
-        simObj,
-      ],
-      { cwd: repoRoot, stdio: "inherit" },
-    )
-    execFileSync("ar", ["rcs", simLib, simObj], { cwd: repoRoot, stdio: "inherit" })
+    if (includeDevice) {
+      ensureRustTargetsInstalled(repoRoot, ["aarch64-apple-ios"])
+      execFileSync(
+        "cargo",
+        [
+          "build",
+          "--manifest-path",
+          join(rppairingDir, "Cargo.toml"),
+          "--target",
+          "aarch64-apple-ios",
+          "--release",
+          "--locked",
+          "--target-dir",
+          rppairingTargetDir,
+        ],
+        {
+          cwd: repoRoot,
+          stdio: "inherit",
+          env: {
+            ...process.env,
+            ...iosCargoTargetEnv("aarch64-apple-ios"),
+            IPHONEOS_DEPLOYMENT_TARGET: "16.0",
+          },
+        },
+      )
+      const deviceLib = join(rppairingTargetDir, "aarch64-apple-ios/release/libishplus_rppairing.a")
+      const deviceFw = buildStaticFrameworkBundle({
+        outputDir: join(simTemp, "device"),
+        frameworkName: "IshPlusRPPairing",
+        bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
+        staticLibPath: deviceLib,
+        headerSourcePath: headerSrc,
+        headerFileName: "ishplus_rppairing.h",
+        platform: "iPhoneOS",
+      })
+      frameworkArgs.push("-framework", deviceFw)
+    }
 
-    const deviceFw = buildStaticFrameworkBundle({
-      outputDir: join(simTemp, "device"),
-      frameworkName: "IshPlusRPPairing",
-      bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
-      staticLibPath: deviceLib,
-      headerSourcePath: headerSrc,
-      headerFileName: "ishplus_rppairing.h",
-      platform: "iPhoneOS",
-    })
-    const simFw = buildStaticFrameworkBundle({
-      outputDir: join(simTemp, "simulator"),
-      frameworkName: "IshPlusRPPairing",
-      bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
-      staticLibPath: simLib,
-      headerSourcePath: headerSrc,
-      headerFileName: "ishplus_rppairing.h",
-      platform: "iPhoneSimulator",
-    })
+    if (includeSim) {
+      const simObj = join(simTemp, "simulator.o")
+      const simLib = join(simTemp, "libishplus_rppairing.a")
+
+      execFileSync(
+        "xcrun",
+        [
+          "--sdk",
+          "iphonesimulator",
+          "clang",
+          "-c",
+          "-target",
+          "arm64-apple-ios16.0-simulator",
+          join(rppairingDir, "simulator.c"),
+          "-o",
+          simObj,
+        ],
+        { cwd: repoRoot, stdio: "inherit" },
+      )
+      execFileSync("ar", ["rcs", simLib, simObj], { cwd: repoRoot, stdio: "inherit" })
+
+      const simFw = buildStaticFrameworkBundle({
+        outputDir: join(simTemp, "simulator"),
+        frameworkName: "IshPlusRPPairing",
+        bundleId: "moe.remon.deskfleet.plus.IshPlusRPPairing",
+        staticLibPath: simLib,
+        headerSourcePath: headerSrc,
+        headerFileName: "ishplus_rppairing.h",
+        platform: "iPhoneSimulator",
+      })
+      frameworkArgs.push("-framework", simFw)
+    }
 
     execFileSync(
       "xcodebuild",
       [
         "-create-xcframework",
-        "-framework",
-        deviceFw,
-        "-framework",
-        simFw,
+        ...frameworkArgs,
         "-output",
         xcframeworkDir,
       ],
@@ -775,22 +805,7 @@ export function buildViewerXcframework(
   targets: readonly IosViewerTarget[] = ALL_IOS_VIEWER_TARGETS,
 ): string {
   const profile = release ? "release" : "debug"
-
-  const installed = execFileSync("rustup", ["target", "list", "--installed"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  })
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-
-  const missing = targets.filter(target => !installed.includes(target))
-  if (missing.length > 0) {
-    execFileSync("rustup", ["target", "add", ...missing], {
-      cwd: repoRoot,
-      stdio: "inherit",
-    })
-  }
+  ensureRustTargetsInstalled(repoRoot, targets)
 
   for (const target of targets) {
     execFileSync(
@@ -854,8 +869,8 @@ if (import.meta.main) {
   const viewerXcframework = buildViewerXcframework(repoRoot, frameworksDir, release, targets)
   console.log(`Staged ${viewerXcframework} (${targets.join(", ")})`)
 
-  const rppairingXcframework = buildRppairingXcframework(repoRoot, frameworksDir)
-  console.log(`Staged ${rppairingXcframework}`)
+  const rppairingXcframework = buildRppairingXcframework(repoRoot, frameworksDir, targets)
+  console.log(`Staged ${rppairingXcframework} (${targets.join(", ")})`)
 
   const rvvmTarball = await downloadCachedArtifact(RVVM_SOURCE_SPEC, cacheDir)
   const librvvmXcframework = buildLibrvvmXcframework(repoRoot, rvvmTarball, frameworksDir)
