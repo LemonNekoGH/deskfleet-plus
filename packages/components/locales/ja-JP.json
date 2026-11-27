@@ -726,6 +726,32 @@
       "pairingHint": "「開発者向けオプション > ワイヤレスデバッグ > ペアリングコードによるデバイスのペアリング」を開きます。ローカルのペアリングサービスを検出すると、通知からも入力できます。",
       "invalidPairInput": "有効なポート番号（1〜65535）と数字のペアリングコードを入力してください。"
     },
+    "iosScreenShare": {
+      "title": "iOS リモート画面共有・操作",
+      "statusLabel": "現在のモード",
+      "statusDescription": "DeskFleet からこの iOS デバイスへ接続した際の画面共有と入力操作の方式を制御します。",
+      "mode": {
+        "coredeviceControl": "CoreDevice（画面 + リモート操作）",
+        "coredeviceViewOnly": "CoreDevice（閲覧のみ）",
+        "replaykit": "ReplayKit ブロードキャスト（閲覧のみ）",
+        "unavailable": "無効"
+      },
+      "coreDeviceLabel": "CoreDevice リモート操作",
+      "coreDeviceDescription": "LocalDevVPN 経由で HEVC 映像を配信し、タッチ・キーボード・ハードウェアボタン・クリップボード操作を行います（ブロードキャスト確認不要）。",
+      "coreDevice": {
+        "readyControl": "利用可能（画面 + タッチ/キーボード）",
+        "readyViewOnly": "利用可能（画面のみ）",
+        "missingPairing": "ペアリングファイルが必要",
+        "vpnInactive": "LocalDevVPN が無効",
+        "unavailable": "利用不可"
+      },
+      "probeCoreDevice": "CoreDevice を確認",
+      "openLocalDevVpn": "LocalDevVPN を開く",
+      "replayKitLabel": "ReplayKit 画面ブロードキャスト",
+      "replayKitDescription": "CoreDevice が利用できない場合、DeskFleet Plus ブロードキャスト拡張機能で閲覧専用の画面共有を行います。",
+      "startBroadcast": "ブロードキャスト開始",
+      "stopBroadcast": "ブロードキャスト停止"
+    },
     "thisComputer": "このコンピューター", "launchAtStartup": "ログイン時に起動",
     "launchAtStartupDescription": "ログイン時に DeskFleet を自動で起動します。", "launchAtStartupUnavailable": "Linux、macOS、Windows にインストールしたアプリで利用できます。",
     "keepAwake": "スリープを防止", "keepAwakeDescription": "DeskFleet の実行中は、トレイに格納されている間も、このコンピューターとディスプレイのスリープを防ぎます。",
@@ -1818,5 +1844,15 @@
     "connectErrorTitle": "プレビューに接続できませんでした",
     "retry": "再試行",
     "unavailable": "このプラットフォームでは Web プレビューを利用できません。"
+  },
+  "localDaemon": {
+    "notStartedTitle": "ローカル Daemon が起動していません",
+    "notStartedDescription": "内蔵ローカルデーモンが自動で起動しませんでした。下のボタンから再ペアリングなしで起動できます。",
+    "openSetup": "ローカル Daemon を起動",
+    "recoveryTitle": "ローカル Daemon を起動",
+    "recoveryDescription": "このデバイスはすでに設定済みです。内蔵 Linux デーモンを起動すると再ペアリングなしでチームに再接続します。",
+    "startAction": "起動",
+    "starting": "起動中…",
+    "startFailed": "ローカル Daemon の起動に失敗しました。LocalDevVPN や JIT の状態を確認して再試行してください。"
   }
 }

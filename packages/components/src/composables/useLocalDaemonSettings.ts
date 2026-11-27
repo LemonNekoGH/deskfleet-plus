@@ -1,4 +1,4 @@
-import { computed, onMounted, ref, watch, type ComputedRef } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch, type ComputedRef } from "vue"
 import { useAccountSession } from "./useAccountSession.ts"
 import { usePlatformClient } from "./usePlatformClient.ts"
 
@@ -29,6 +29,14 @@ export function useLocalDaemonSettings(): ComputedRef<boolean> {
   if (client.platform === "web" && client.probeLocalDaemonSettings) {
     onMounted(() => { void probe() })
     watch(() => session?.localMachineId?.value, () => { void probe() })
+    if (client.localDaemon) {
+      const stop = client.settings.onChanged(state => {
+        if (state.status === "running" || state.status === "stopped") {
+          void probe()
+        }
+      })
+      onBeforeUnmount(stop)
+    }
   }
 
   return computed(() => client.platform !== "web" || (Boolean(client.probeLocalDaemonSettings) && probed.value))

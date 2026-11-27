@@ -18,6 +18,8 @@ enum Session {
     Local(InputSession),
     #[cfg(target_os = "linux")]
     Android(InputSession<crate::android_scrcpy::ScrcpyInput>),
+    #[cfg(target_os = "linux")]
+    Ios(InputSession<crate::ios_screen::IosScreenInput>),
     #[cfg(windows)]
     Service {
         client: crate::windows_desktop::Client,
@@ -31,6 +33,12 @@ impl Session {
         if crate::android_scrcpy::is_configured() {
             return Ok(Self::Android(InputSession::with_backend(|| {
                 crate::android_scrcpy::ScrcpyInput::open(display_id)
+            })?));
+        }
+        #[cfg(target_os = "linux")]
+        if crate::ios_screen::is_configured() {
+            return Ok(Self::Ios(InputSession::with_backend(|| {
+                crate::ios_screen::IosScreenInput::open(display_id)
             })?));
         }
         #[cfg(windows)]
@@ -52,6 +60,8 @@ impl Session {
             Self::Local(session) => session.handle(event),
             #[cfg(target_os = "linux")]
             Self::Android(session) => session.handle(event),
+            #[cfg(target_os = "linux")]
+            Self::Ios(session) => session.handle(event),
             #[cfg(windows)]
             Self::Service { client, .. } => {
                 if matches!(event, InputEvent::SecureAttention) {
@@ -78,6 +88,11 @@ impl Session {
                 session.refresh_desktop()?;
                 session.poll_clipboard()
             }
+            #[cfg(target_os = "linux")]
+            Self::Ios(session) => {
+                session.refresh_desktop()?;
+                session.poll_clipboard()
+            }
             #[cfg(windows)]
             Self::Service { client, .. } => client.refresh_input().map_err(service_error),
         }
@@ -88,6 +103,8 @@ impl Session {
             Self::Local(session) => session.release_all(),
             #[cfg(target_os = "linux")]
             Self::Android(session) => session.release_all(),
+            #[cfg(target_os = "linux")]
+            Self::Ios(session) => session.release_all(),
             #[cfg(windows)]
             Self::Service { client, .. } => client.stop().map_err(service_error),
         }

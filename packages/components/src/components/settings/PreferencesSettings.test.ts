@@ -82,11 +82,13 @@ test("shows telemetry consent switch only when site telemetry is enabled and syn
 })
 
 test("hides Remote Agents and Wireless ADB on pure Web hosts and shows them only after probing a local mobile daemon", async () => {
-  configureClient({ ...host, platform: "web", probeLocalDaemonSettings: undefined, wirelessAdb: undefined })
+  configureClient({ ...host, platform: "web", probeLocalDaemonSettings: undefined, wirelessAdb: undefined, iosScreenShare: undefined, localDaemon: undefined })
   wrapper = mount(PreferencesSettings, { global: { plugins: [i18n] } })
   await flushPromises()
+  expect(wrapper.find("#local-daemon-heading").exists()).toBe(false)
   expect(wrapper.find("#remote-agents-heading").exists()).toBe(false)
   expect(wrapper.find("#wireless-adb-heading").exists()).toBe(false)
+  expect(wrapper.find("#ios-screen-share-heading").exists()).toBe(false)
   wrapper.unmount()
 
   // Mobile host where the local daemon has not been provisioned yet stays hidden.

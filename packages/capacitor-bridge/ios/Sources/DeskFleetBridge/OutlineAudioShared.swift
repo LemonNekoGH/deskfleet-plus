@@ -7,6 +7,8 @@ final class OutlineAudioSharedStore {
     static let spectrumBins = 224
     static let stereoSpectrumBytes = spectrumBins * 2
     static let heartbeatTimeoutMs: UInt64 = 5_000
+    static let consumerOutlineAudio: UInt32 = 1 << 0
+    static let consumerScreenShare: UInt32 = 1 << 1
 
     private static let fileSize = 512
     private static let offStopReq = 0
@@ -14,6 +16,10 @@ final class OutlineAudioSharedStore {
     private static let offHeartbeat = 8
     private static let offAudioTs = 16
     private static let offSpectrum = 24
+    private static let offConsumers = 472
+    private static let offVideoWidth = 476
+    private static let offVideoHeight = 480
+    private static let offVideoFps = 484
 
     private let fd: Int32
     private let ptr: UnsafeMutableRawPointer
@@ -62,6 +68,10 @@ final class OutlineAudioSharedStore {
     func markBroadcastStopped() {
         ptr.storeBytes(of: UInt64(0), toByteOffset: Self.offHeartbeat, as: UInt64.self)
         ptr.storeBytes(of: UInt32(0), toByteOffset: Self.offStopReq, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(0), toByteOffset: Self.offConsumers, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(0), toByteOffset: Self.offVideoWidth, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(0), toByteOffset: Self.offVideoHeight, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(0), toByteOffset: Self.offVideoFps, as: UInt32.self)
     }
 
     func updateHeartbeat(_ ts: UInt64 = OutlineAudioSharedStore.nowMs()) {
@@ -70,6 +80,48 @@ final class OutlineAudioSharedStore {
 
     func setStopRequested(_ requested: Bool) {
         ptr.storeBytes(of: UInt32(requested ? 1 : 0), toByteOffset: Self.offStopReq, as: UInt32.self)
+    }
+
+    /// Coordinates BroadcastUpload extension lifetime across Outline Audio and Screen Share.
+    /// Setting a consumer active clears any pending stop request; clearing a consumer only
+    /// requests broadcast termination once no other consumer remains active.
+    func setConsumerActive(_ mask: UInt32, active: Bool) {
+        let current = ptr.load(fromByteOffset: Self.offConsumers, as: UInt32.self)
+        let next = active ? (current | mask) : (current & ~mask)
+        ptr.storeBytes(of: next, toByteOffset: Self.offConsumers, as: UInt32.self)
+        if active {
+            setStopRequested(false)
+        } else if next == 0 {
+            setStopRequested(true)
+        }
+    }
+
+    func consumerMask() -> UInt32 {
+        ptr.load(fromByteOffset: Self.offConsumers, as: UInt32.self)
+    }
+
+    func writeVideoGeometry(
+        width: Int,
+        height: Int,
+        fps: Int,
+        timestampMs: UInt64 = OutlineAudioSharedStore.nowMs()
+    ) {
+        ptr.storeBytes(of: UInt32(max(0, width)), toByteOffset: Self.offVideoWidth, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(max(0, height)), toByteOffset: Self.offVideoHeight, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(max(0, fps)), toByteOffset: Self.offVideoFps, as: UInt32.self)
+        ptr.storeBytes(of: max(1, timestampMs), toByteOffset: Self.offHeartbeat, as: UInt64.self)
+    }
+
+    func readVideoGeometry(
+        nowMs: UInt64 = OutlineAudioSharedStore.nowMs()
+    ) -> (alive: Bool, width: Int, height: Int, fps: Int) {
+        guard isCurrentlyActive(nowMs: nowMs) else {
+            return (false, 0, 0, 0)
+        }
+        let width = Int(ptr.load(fromByteOffset: Self.offVideoWidth, as: UInt32.self))
+        let height = Int(ptr.load(fromByteOffset: Self.offVideoHeight, as: UInt32.self))
+        let fps = Int(ptr.load(fromByteOffset: Self.offVideoFps, as: UInt32.self))
+        return (true, width, height, fps)
     }
 
     var isStopRequested: Bool {

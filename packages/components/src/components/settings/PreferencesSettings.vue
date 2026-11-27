@@ -7,6 +7,7 @@ import { computed, onMounted, ref } from "vue"
 import { useI18n } from "vue-i18n"
 import AutoDownloadUpdatesSettings from "./AutoDownloadUpdatesSettings.vue"
 import AndroidWirelessAdbSettings from "./AndroidWirelessAdbSettings.vue"
+import IosScreenShareSettings from "./IosScreenShareSettings.vue"
 import KeepAwakeSettings from "./KeepAwakeSettings.vue"
 import LaunchAtStartupSettings from "./LaunchAtStartupSettings.vue"
 import LinuxKeyringSettings from "./LinuxKeyringSettings.vue"
@@ -83,8 +84,17 @@ if (client.platform === "web" && client.updates) {
     </div>
   </section>
   <template v-else>
+    <section v-if="client.localDaemon" class="mb-6" aria-labelledby="local-daemon-heading">
+      <h2 id="local-daemon-heading" class="ui-section-title mb-2">{{ t("settings.thisComputer") }}</h2>
+      <div class="ui-card">
+        <LocalAgentSettings />
+      </div>
+    </section>
     <section v-if="client.wirelessAdb" class="mb-6" aria-labelledby="wireless-adb-heading">
       <AndroidWirelessAdbSettings />
+    </section>
+    <section v-if="client.iosScreenShare" class="mb-6" aria-labelledby="ios-screen-share-heading">
+      <IosScreenShareSettings />
     </section>
     <section v-if="hasLocalDaemonSettings" class="mb-6" aria-labelledby="remote-agents-heading">
       <h2 id="remote-agents-heading" class="ui-section-title mb-2">{{ t("settings.remoteAgentsTitle") }}</h2>

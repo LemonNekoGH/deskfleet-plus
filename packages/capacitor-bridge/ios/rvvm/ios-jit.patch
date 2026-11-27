@@ -332,3 +332,35 @@ index 9e43cc9..ad49427 100644
      int memfd = vma_anon_memfd(size);
      if (memfd > 0) {
          *rw   = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NOSYNC, memfd, 0);
+diff --git a/src/devices/tap_user.c b/src/devices/tap_user.c
+index 0000000..1111111 100644
+--- a/src/devices/tap_user.c
++++ b/src/devices/tap_user.c
+@@ -22,6 +22,7 @@
+ #define GATEWAY_MAC ((const uint8_t*)"\x00\x08\x97\xDE\xC0\xDE")
+ #define GATEWAY_IP  ((const uint8_t*)"\xC0\xA8\x00\x01")
+ 
++#define HOST_LOOPBACK_IP ((const uint8_t*)"\xC0\xA8\x00\xFE")
+ #define CLIENT_IP   ((const uint8_t*)"\xC0\xA8\x00\x64")
+ 
+ // EtherType for Ethernet Packets
+@@ -722,8 +723,17 @@ static void handle_tcp(tap_dev_t* tap, const uint8_t* buffer, size_t size, net_a
+         }
+     } else if (flags == TCP_FLAG_SYN) {
+         // Initiate new async connection
+-        net_sock_t* sock = net_tcp_connect(dst, NULL, false);
++        net_addr_t connect_dst = *dst;
++        bool to_host_loopback = (connect_dst.type == NET_TYPE_IPV4
++            && memcmp(connect_dst.ip, HOST_LOOPBACK_IP, PLEN_IPv4) == 0);
++        if (to_host_loopback) {
++            memcpy(connect_dst.ip, "\x7F\x00\x00\x01", PLEN_IPv4);
++        }
++        net_sock_t* sock = net_tcp_connect(&connect_dst, NULL, false);
+         if (sock) {
++            if (to_host_loopback) {
++                memcpy(net_sock_addr(sock)->ip, HOST_LOOPBACK_IP, PLEN_IPv4);
++            }
+             ts = safe_new_obj(tap_sock_t);
+             ts->sock = sock;
+             ts->addr = *src;
+

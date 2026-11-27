@@ -847,6 +847,32 @@
       "pairingHint": "Open Developer options > Wireless debugging > Pair device with pairing code. DeskFleet can also prompt you in a notification when it detects a local pairing service.",
       "invalidPairInput": "Enter a valid port (1–65535) and numeric pairing code."
     },
+    "iosScreenShare": {
+      "title": "iOS Remote Screen & Control",
+      "statusLabel": "Current mode",
+      "statusDescription": "Controls how this iOS device shares its screen and accepts remote input when accessed from DeskFleet.",
+      "mode": {
+        "coredeviceControl": "CoreDevice (Screen + Remote Control)",
+        "coredeviceViewOnly": "CoreDevice (Screen Only)",
+        "replaykit": "ReplayKit Broadcast (View-only)",
+        "unavailable": "Inactive"
+      },
+      "coreDeviceLabel": "CoreDevice Remote Control",
+      "coreDeviceDescription": "Streams HEVC video and injects touch, keyboard, hardware button, and clipboard events over LocalDevVPN without needing a Broadcast prompt.",
+      "coreDevice": {
+        "readyControl": "Ready (screen + touch/keyboard)",
+        "readyViewOnly": "Ready (screen only)",
+        "missingPairing": "Pairing file required",
+        "vpnInactive": "LocalDevVPN inactive",
+        "unavailable": "Unavailable"
+      },
+      "probeCoreDevice": "Check CoreDevice",
+      "openLocalDevVpn": "Open LocalDevVPN",
+      "replayKitLabel": "ReplayKit Screen Broadcast",
+      "replayKitDescription": "Fallback view-only screen capture using the DeskFleet Plus Broadcast extension when CoreDevice is not active.",
+      "startBroadcast": "Start broadcast",
+      "stopBroadcast": "Stop broadcast"
+    },
     "thisComputer": "This computer",
     "launchAtStartup": "Launch at startup",
     "launchAtStartupDescription": "Open DeskFleet automatically when you log in.",
@@ -2408,5 +2434,15 @@
     "connectErrorTitle": "Could not connect preview",
     "retry": "Retry",
     "unavailable": "Web preview is unavailable on this platform."
+  },
+  "localDaemon": {
+    "notStartedTitle": "Local daemon not started",
+    "notStartedDescription": "The embedded local daemon did not start automatically. Open setup to start it without pairing again.",
+    "openSetup": "Start local daemon",
+    "recoveryTitle": "Start local daemon",
+    "recoveryDescription": "This device is already configured. Starting the embedded Linux daemon will reconnect it to your team without pairing again.",
+    "startAction": "Start",
+    "starting": "Starting…",
+    "startFailed": "Failed to start the local daemon. Check LocalDevVPN or JIT status and try again."
   }
 }

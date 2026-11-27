@@ -19,13 +19,20 @@ import { createBrowserFiles } from "@deskfleet/client/browser-files"
 import { CapacitorFilesEndpoint, type FilesBridgePlugin } from "./files.ts"
 import {
   attachLocalEnrollment as localDaemonEnrollment,
+  createCapacitorLocalDaemonControl as localDaemonControl,
   createLocalDaemonHostSettings as localDaemonHostSettings,
   type LocalDaemonBridgePlugin,
   type LocalDaemonHostSettings,
+  type LocalDaemonLifecycleBinding,
+  type LocalDaemonLifecycleBridgePlugin,
   type LocalDaemonSettingsBridgePlugin,
 } from "./local-daemon.ts"
 import { createCapacitorPortsApi as portsApi, type PortsBridgePlugin } from "./ports.ts"
 import { createCapacitorSpeechApi as speechApi, type SpeechBridgePlugin } from "./speech.ts"
+import {
+  createCapacitorIosScreenShareApi as iosScreenShareApi,
+  type IosScreenShareBridgePlugin,
+} from "./ios-screen-share.ts"
 import {
   createCapacitorWirelessAdbApi as wirelessAdbApi,
   type WirelessAdbBridgePlugin,
@@ -41,8 +48,11 @@ export {
 } from "./push-notifications.ts"
 
 export type {
+  IosScreenShareBridgePlugin,
   LocalDaemonBridgePlugin,
   LocalDaemonHostSettings,
+  LocalDaemonLifecycleBinding,
+  LocalDaemonLifecycleBridgePlugin,
   LocalDaemonSettingsBridgePlugin,
   WirelessAdbBridgePlugin,
 }
@@ -62,7 +72,9 @@ export interface DeskFleetBridgeCapacitorPlugin
     PortsBridgePlugin,
     TelemetryBridgePlugin,
     LocalDaemonBridgePlugin,
+    LocalDaemonLifecycleBridgePlugin,
     LocalDaemonSettingsBridgePlugin,
+    IosScreenShareBridgePlugin,
     WirelessAdbBridgePlugin {
   authenticate(options: { url: string; callbackScheme: string }): Promise<{ url: string }>
   getInstallSource?(): Promise<{ installerPackageName: string | null }>
@@ -98,8 +110,16 @@ export interface DeskFleetBridgeCapacitorPlugin
     listenerFunc: Parameters<NonNullable<LocalDaemonBridgePlugin["addListener"]>>[1],
   ): Promise<PluginListenerHandle>
   addListener(
+    eventName: "localDaemonState",
+    listenerFunc: (state: import("@deskfleet/client/local-agent").LocalAgentState) => void,
+  ): Promise<PluginListenerHandle>
+  addListener(
     eventName: "wirelessAdbState",
     listenerFunc: Parameters<WirelessAdbBridgePlugin["addListener"]>[1],
+  ): Promise<PluginListenerHandle>
+  addListener(
+    eventName: "iosScreenShareState",
+    listenerFunc: Parameters<IosScreenShareBridgePlugin["addListener"]>[1],
   ): Promise<PluginListenerHandle>
   addListener(
     eventName: "portsEvent",
@@ -132,10 +152,22 @@ export function createLocalDaemonHostSettings(
   return localDaemonHostSettings(plugin)
 }
 
+export function createCapacitorLocalDaemonControl(
+  plugin: LocalDaemonLifecycleBridgePlugin = DeskFleetBridge,
+): LocalDaemonLifecycleBinding {
+  return localDaemonControl(plugin)
+}
+
 export function createCapacitorWirelessAdbApi(
   plugin: WirelessAdbBridgePlugin = DeskFleetBridge,
 ) {
   return wirelessAdbApi(plugin)
+}
+
+export function createCapacitorIosScreenShareApi(
+  plugin: IosScreenShareBridgePlugin = DeskFleetBridge,
+) {
+  return iosScreenShareApi(plugin)
 }
 
 export function createCapacitorFilesApi(central: CentralApi, plugin: FilesBridgePlugin = DeskFleetBridge) {

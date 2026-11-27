@@ -3,8 +3,10 @@ import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet
 import type { RemoteAgentSettings, WorktreePreferences } from "@deskfleet/client/settings"
 import {
   attachLocalEnrollment,
+  createCapacitorLocalDaemonControl,
   createLocalDaemonHostSettings,
   type LocalDaemonBridgePlugin,
+  type LocalDaemonLifecycleBridgePlugin,
   type LocalDaemonSettingsBridgePlugin,
   type PreparedEnrollment,
 } from "./local-daemon.ts"
@@ -366,4 +368,50 @@ test("probeLocalDaemonSettings returns false when local daemon CLI is unavailabl
   })
 
   expect(await hostSettings.probeLocalDaemonSettings()).toBe(false)
+})
+
+test("createCapacitorLocalDaemonControl binds state, toggle, start, and live output", async () => {
+  let stateListener: ((state: { enabled: boolean; status: "stopped" | "starting" | "running" | "stopping" | "error"; error?: string }) => void) | undefined
+  let logListener: ((data: { chunk: string }) => void) | undefined
+  let current = { enabled: true, status: "error" as const, error: "LocalDevVPN offline" }
+
+  const plugin: LocalDaemonLifecycleBridgePlugin = {
+    async localDaemonState() { return current },
+    async localDaemonSetEnabled({ enabled }) {
+      return { enabled, status: enabled ? "running" : "stopped" }
+    },
+    async localDaemonStart() {
+      logListener?.({ chunk: "==> Booting...\n" })
+      return { enabled: true, status: "running" }
+    },
+    async localDaemonLogs() { return { output: "Prior boot error\n" } },
+    async addListener(eventName: string, listenerFunc: (payload: unknown) => void) {
+      if (eventName === "localDaemonState") {
+        stateListener = listenerFunc as typeof stateListener
+      } else if (eventName === "localDaemonLog") {
+        logListener = listenerFunc as typeof logListener
+      }
+      return { async remove() {} }
+    },
+  }
+
+  const binding = createCapacitorLocalDaemonControl(plugin)
+  expect(await binding.settings.get()).toEqual(current)
+  expect(await binding.control.recentOutput!()).toBe("Prior boot error\n")
+
+  const states: unknown[] = []
+  const logs: string[] = []
+  const stopState = binding.settings.onChanged(next => states.push(next))
+  const stopLogs = binding.control.onOutput!(chunk => logs.push(chunk))
+  await Promise.resolve()
+
+  stateListener?.({ enabled: true, status: "starting" })
+  expect(states).toEqual([{ enabled: true, status: "starting" }])
+
+  expect(await binding.control.start()).toEqual({ enabled: true, status: "running" })
+  expect(logs).toEqual(["==> Booting...\n"])
+
+  expect(await binding.settings.setLocalAgentEnabled(false)).toEqual({ enabled: false, status: "stopped" })
+  stopState()
+  stopLogs()
 })

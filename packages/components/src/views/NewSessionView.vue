@@ -8,8 +8,10 @@ import { computed, onScopeDispose, ref, shallowRef, useTemplateRef } from "vue"
 import { useI18n } from "vue-i18n"
 import { RouterLink, useRouter } from "vue-router"
 import PaneHeader from "../components/chrome/PaneHeader.vue"
+import LocalDaemonRecoveryDialog from "../components/account/LocalDaemonRecoveryDialog.vue"
 import WorkspaceCreateDialog from "../components/catalog/WorkspaceCreateDialog.vue"
 import ErrorNotice from "../components/common/ErrorNotice.vue"
+import UiButton from "../components/common/UiButton.vue"
 import SessionComposer from "../components/composer/SessionComposer.vue"
 import FirstTaskGuide from "../components/session/FirstTaskGuide.vue"
 import SessionWelcome from "../components/session/SessionWelcome.vue"
@@ -21,6 +23,7 @@ import { useFleetStore } from "../stores/fleet.ts"
 import { useAgentSessionsStore } from "../stores/agent-sessions.ts"
 import { useLayoutStore } from "../stores/layout.ts"
 import { useProvidersStore } from "../stores/providers.ts"
+import type { LocalAgentState } from "@deskfleet/client/local-agent"
 import type { AgentActor } from "@deskfleet/protocol/agent"
 import type { GitPreparationSnapshot } from "@deskfleet/protocol/git"
 
@@ -52,6 +55,27 @@ const submitting = ref(false)
 const error = shallowRef<unknown>()
 const composer = useTemplateRef<InstanceType<typeof SessionComposer>>("composer")
 const choosingProjectFolder = ref(false)
+const showingLocalDaemonRecovery = ref(false)
+const localDaemonState = ref<LocalAgentState | null>(null)
+if (client.localDaemon) {
+  let stateRevision = 0
+  const stopLocalDaemonState = client.settings.onChanged(next => {
+    stateRevision += 1
+    localDaemonState.value = next
+  })
+  onScopeDispose(stopLocalDaemonState)
+  const initialRevision = stateRevision
+  void client.settings.get().then(next => {
+    if (!disposed && stateRevision === initialRevision) {
+      localDaemonState.value = next
+    }
+  }).catch(() => {})
+}
+const showLocalDaemonWarning = computed(() => Boolean(
+  client.localDaemon
+  && localDaemonState.value?.enabled
+  && (localDaemonState.value.status === "error" || localDaemonState.value.status === "stopped"),
+))
 const skippedGuides = useStorage<string[]>("deskfleet.skipped-first-task-guides", [], undefined, { writeDefaults: false })
 const guideScope = computed(() => JSON.stringify([account?.account.value.serverUrl, account?.account.value.user?.id, account?.teamId.value, fleet.targetId]))
 const guideStep = computed(() => {
@@ -159,9 +183,24 @@ async function submit(): Promise<void> {
     <p v-if="!newSessionTarget" class="m-0 text-ui-text-muted">{{ t("newSession.noTarget") }}</p>
     <p v-if="submitting" role="status" class="text-sm text-ui-text-muted">{{ t("agent.creating") }}</p>
     <ErrorNotice v-if="error" :error="error" class="w-full max-w-xl" />
+    <ErrorNotice
+      v-if="showLocalDaemonWarning"
+      :title="t('localDaemon.notStartedTitle')"
+      :description="localDaemonState?.error || t('localDaemon.notStartedDescription')"
+      class="w-full max-w-xl"
+      data-local-daemon-warning
+    >
+      <UiButton size="sm" data-local-daemon-open-recovery @click="showingLocalDaemonRecovery = true">{{ t("localDaemon.openSetup") }}</UiButton>
+    </ErrorNotice>
     <ErrorNotice v-if="newSessionTarget?.machine.online && providers.error" :error="providers.error" class="w-full max-w-xl" />
     <p v-else-if="!guideStep && newSessionTarget?.machine.online && providers.ready && !providers.providers.length" class="max-w-xl text-center text-sm text-ui-text-muted">{{ t('providers.noneConfigured') }} <RouterLink :to="{ name: 'settings-agents' }" class="text-ui-accent hover:underline">{{ t('providers.manage') }}</RouterLink></p>
   </SessionWelcome>
   <SessionComposer ref="composer" v-model="draft" v-model:attachments="attachments" v-model:mentions="mentions" v-model:context="sessionContext" v-model:base-branch="baseBranch" v-model:base-revisions="baseRevisions" v-model:cwd="workingDirectory" :location="newSessionTarget" :disabled="!newSessionTarget?.machine.online || !providers.ready || !providers.selectedId" :submitting="submitting" show-target @submit="submit" />
   <WorkspaceCreateDialog v-if="choosingProjectFolder" @created="choosingProjectFolder = false" @cancel="choosingProjectFolder = false" />
+  <LocalDaemonRecoveryDialog
+    v-if="showingLocalDaemonRecovery"
+    :initial-error="localDaemonState?.error"
+    @close="showingLocalDaemonRecovery = false"
+    @started="showingLocalDaemonRecovery = false"
+  />
 </template>

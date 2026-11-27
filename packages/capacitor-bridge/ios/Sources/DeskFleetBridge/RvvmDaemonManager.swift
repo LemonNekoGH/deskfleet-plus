@@ -14,6 +14,9 @@ internal final class RvvmDaemonManager {
     private let versionName: String
     private let fallbackMachineName: String
     private let onLog: (String) -> Void
+    private let screenBridgeProvider: () -> RvvmDaemonCommands.ScreenBridgeConfig?
+    private let lifecycle: RvvmLocalDaemonLifecycle
+    private let lifecycleQueue = DispatchQueue(label: "moe.remon.deskfleet.plus.rvvm.lifecycle", qos: .userInitiated)
     private let keepAlive = RvvmBackgroundKeepAlive()
     private let stateLock = NSLock()
     private let execLock = NSLock()
@@ -27,11 +30,36 @@ internal final class RvvmDaemonManager {
     init(
         versionName: String,
         fallbackMachineName: String,
-        onLog: @escaping (String) -> Void = { _ in }
+        onLog: @escaping (String) -> Void = { _ in },
+        onStateChanged: @escaping ([String: Any]) -> Void = { _ in },
+        screenBridgeProvider: @escaping () -> RvvmDaemonCommands.ScreenBridgeConfig? = { nil }
     ) {
         self.versionName = versionName
         self.fallbackMachineName = fallbackMachineName
         self.onLog = onLog
+        self.screenBridgeProvider = screenBridgeProvider
+        self.lifecycle = RvvmLocalDaemonLifecycle(
+            hasExistingSetup: {
+                Self.hasExistingSetupOnDisk()
+            },
+            onChanged: onStateChanged
+        )
+    }
+
+    private static func hasExistingSetupOnDisk() -> Bool {
+        let fm = FileManager.default
+        if let group = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupId),
+           fm.fileExists(atPath: group.appendingPathComponent("pairingFile.plist").path) {
+            return true
+        }
+        if let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let vmDir = docs.appendingPathComponent("VM", isDirectory: true)
+            if fm.fileExists(atPath: vmDir.appendingPathComponent("pairingFile.plist").path)
+                || fm.fileExists(atPath: vmDir.appendingPathComponent("deskfleet-riscv64.img").path) {
+                return true
+            }
+        }
+        return false
     }
 
     deinit {
@@ -40,24 +68,100 @@ internal final class RvvmDaemonManager {
 
     // MARK: - Logging helpers
 
+    private func appendAndEmitLog(_ text: String) {
+        lifecycle.appendLog(text)
+        onLog(text)
+    }
+
     private func emitStep(_ text: String) {
-        onLog("\u{1B}[1;36m==> \(text)\u{1B}[0m\n")
+        appendAndEmitLog("\u{1B}[1;36m==> \(text)\u{1B}[0m\n")
     }
 
     private func emitInfo(_ text: String) {
-        onLog("  \(text)\n")
+        appendAndEmitLog("  \(text)\n")
     }
 
     private func emitSuccess(_ text: String) {
-        onLog("\u{1B}[1;32m✓ \(text)\u{1B}[0m\n")
+        appendAndEmitLog("\u{1B}[1;32m✓ \(text)\u{1B}[0m\n")
     }
 
     private func emitWarning(_ text: String) {
-        onLog("\u{1B}[33m! \(text)\u{1B}[0m\n")
+        appendAndEmitLog("\u{1B}[33m! \(text)\u{1B}[0m\n")
     }
 
     private func emitError(_ text: String) {
-        onLog("\u{1B}[1;31m✗ \(text)\u{1B}[0m\n")
+        appendAndEmitLog("\u{1B}[1;31m✗ \(text)\u{1B}[0m\n")
+    }
+
+    // MARK: - Local daemon lifecycle (Electron LocalAgentController parity)
+
+    func localDaemonState() -> [String: Any] {
+        return lifecycle.snapshot().toDictionary()
+    }
+
+    func recentLogs() -> String {
+        return lifecycle.recentLogs()
+    }
+
+    /// Mirrors Electron's startup behavior: if the persisted local daemon toggle is enabled,
+    /// attempts a silent background boot on app launch and records an error state (without
+    /// forcing an unsolicited modal sheet) if JIT/LocalDevVPN or VM startup fails.
+    func autoStartIfEnabled() {
+        lifecycleQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.lifecycle.isEnabled else { return }
+            let current = self.lifecycle.snapshot()
+            guard current.status == .stopped else { return }
+            _ = self.startLocalDaemonLocked(interactive: false, presenterProvider: { nil })
+        }
+    }
+
+    func setLocalDaemonEnabled(
+        _ enabled: Bool,
+        presenterProvider: @escaping () -> UIViewController?
+    ) -> [String: Any] {
+        return lifecycleQueue.sync {
+            _ = lifecycle.setEnabledPreference(enabled)
+            if enabled {
+                return startLocalDaemonLocked(interactive: true, presenterProvider: presenterProvider)
+            }
+            _ = lifecycle.transition(to: .stopping)
+            stopVM()
+            return lifecycle.transition(to: .stopped).toDictionary()
+        }
+    }
+
+    func startLocalDaemon(
+        interactive: Bool,
+        presenterProvider: @escaping () -> UIViewController?
+    ) -> [String: Any] {
+        return lifecycleQueue.sync {
+            if interactive && !lifecycle.isEnabled {
+                _ = lifecycle.setEnabledPreference(true)
+            }
+            return startLocalDaemonLocked(interactive: interactive, presenterProvider: presenterProvider)
+        }
+    }
+
+    private func startLocalDaemonLocked(
+        interactive: Bool,
+        presenterProvider: @escaping () -> UIViewController?
+    ) -> [String: Any] {
+        if isVMRunning() && isGuestDaemonReady() {
+            return lifecycle.transition(to: .running).toDictionary()
+        }
+        lifecycle.resetLogBuffer()
+        _ = lifecycle.transition(to: .starting)
+        do {
+            try ensureRunningAndProvisioned(
+                allowInteractiveJitPrompt: interactive,
+                presenterProvider: presenterProvider
+            )
+            return lifecycle.transition(to: .running).toDictionary()
+        } catch {
+            let msg = error.localizedDescription
+            return lifecycle.transition(to: .error, error: msg).toDictionary()
+        }
     }
 
     // MARK: - LocalDaemonBridgePlugin operations
@@ -89,7 +193,7 @@ internal final class RvvmDaemonManager {
         teamId: String,
         presenterProvider: @escaping () -> UIViewController?
     ) throws -> [String: Any] {
-        try ensureRunningAndProvisioned(presenterProvider: presenterProvider)
+        try ensureStartedOnLifecycleQueue(interactive: true, presenterProvider: presenterProvider)
         emitStep("Preparing machine identity for \(serverUrl)...")
         let cmd = RvvmDaemonCommands.prepareEnrollmentCommand(serverUrl: serverUrl, teamId: teamId)
         let output = try execInGuest(cmd, timeoutSeconds: 60)
@@ -102,7 +206,7 @@ internal final class RvvmDaemonManager {
         credentialsJson: String,
         presenterProvider: @escaping () -> UIViewController?
     ) throws -> [String: Any] {
-        try ensureRunningAndProvisioned(presenterProvider: presenterProvider)
+        try ensureStartedOnLifecycleQueue(interactive: true, presenterProvider: presenterProvider)
         emitStep("Saving machine credentials into local daemon...")
         let proxy = resolveSystemProxy()
         let cmd = RvvmDaemonCommands.enrollCommand(serverUrl: serverUrl, credentialsJson: credentialsJson)
@@ -117,7 +221,7 @@ internal final class RvvmDaemonManager {
             ) {
                 let trimmedDiag = diag.trimmingCharacters(in: .newlines)
                 if !trimmedDiag.isEmpty {
-                    onLog("\(trimmedDiag)\n")
+                    appendAndEmitLog("\(trimmedDiag)\n")
                 }
                 if let probeErr = RvvmDaemonCommands.extractProbeError(from: trimmedDiag) {
                     let combined = "\(error.localizedDescription) (\(probeErr))"
@@ -132,9 +236,54 @@ internal final class RvvmDaemonManager {
         }
         let enrolled = try RvvmDaemonCommands.extractJsonObject(from: output)
         emitSuccess("Local daemon enrolled.")
-        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
+        let screenBridge = screenBridgeProvider()
+        _ = try execInGuest(
+            RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy, screenBridge: screenBridge),
+            timeoutSeconds: 20
+        )
         _ = try? execInGuest("sync >/dev/null 2>&1 || true", timeoutSeconds: 10)
+        _ = lifecycle.setEnabledPreference(true)
+        _ = lifecycle.transition(to: .running)
         return enrolled
+    }
+
+    private func ensureStartedOnLifecycleQueue(
+        interactive: Bool,
+        presenterProvider: @escaping () -> UIViewController?
+    ) throws {
+        var thrownError: Error?
+        lifecycleQueue.sync {
+            if interactive && !lifecycle.isEnabled {
+                _ = lifecycle.setEnabledPreference(true)
+            }
+            if isVMRunning() && isGuestDaemonReady() {
+                _ = lifecycle.transition(to: .running)
+                return
+            }
+            lifecycle.resetLogBuffer()
+            _ = lifecycle.transition(to: .starting)
+            do {
+                try ensureRunningAndProvisioned(
+                    allowInteractiveJitPrompt: interactive,
+                    presenterProvider: presenterProvider
+                )
+                _ = lifecycle.transition(to: .running)
+            } catch {
+                _ = lifecycle.transition(to: .error, error: error.localizedDescription)
+                thrownError = error
+            }
+        }
+        if let thrownError {
+            throw thrownError
+        }
+    }
+
+    func refreshCapabilitiesAsync() {
+        guard isVMRunning() else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self, self.isVMRunning() else { return }
+            _ = try? self.execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 15)
+        }
     }
 
     func settings(args: [String]) throws -> [String: Any] {
@@ -178,9 +327,13 @@ internal final class RvvmDaemonManager {
     }
 
     private func ensureRunningAndProvisioned(
+        allowInteractiveJitPrompt: Bool,
         presenterProvider: @escaping () -> UIViewController?
     ) throws {
-        try ensureJitEnabled(presenterProvider: presenterProvider)
+        try ensureJitEnabled(
+            allowInteractiveJitPrompt: allowInteractiveJitPrompt,
+            presenterProvider: presenterProvider
+        )
         try ensureVMBooted()
         try ensureGuestDaemonProvisioned()
     }
@@ -195,7 +348,10 @@ internal final class RvvmDaemonManager {
         return rvvm_host_check_jit_enabled()
     }
 
-    private func ensureJitEnabled(presenterProvider: @escaping () -> UIViewController?) throws {
+    private func ensureJitEnabled(
+        allowInteractiveJitPrompt: Bool,
+        presenterProvider: @escaping () -> UIViewController?
+    ) throws {
         stateLock.lock()
         let alreadyRunning = (vmHandle != nil && rvvm_host_is_running(vmHandle))
         stateLock.unlock()
@@ -213,6 +369,7 @@ internal final class RvvmDaemonManager {
 
         // Try silent activation first only when both a pairing file and LocalDevVPN are ready.
         let hasPairingFile = FileManager.default.fileExists(atPath: pairingURL.path)
+        var silentFailureReason: String?
         if hasPairingFile {
             if RvvmJitSetupViewController.probeLocalDevVpnSync(timeout: 0.8) {
                 emitStep("LocalDevVPN detected; activating Pure JIT for embedded Linux VM...")
@@ -240,13 +397,30 @@ internal final class RvvmDaemonManager {
                     helperLock.unlock()
                     if let failure {
                         emitWarning("Silent JIT activation failed: \(failure)")
+                        silentFailureReason = "Pure JIT activation failed: \(failure)"
                         break
                     }
                     Thread.sleep(forTimeInterval: 0.15)
                 }
+                if silentFailureReason == nil {
+                    silentFailureReason = "Timed out activating Pure JIT automatically."
+                }
             } else {
-                emitInfo("LocalDevVPN (10.7.0.1:62078) not detected; opening JIT setup...")
+                emitInfo("LocalDevVPN (10.7.0.1:62078) not detected.")
+                silentFailureReason = "LocalDevVPN (10.7.0.1) is not active; unable to activate Pure JIT."
             }
+        } else {
+            silentFailureReason = "Pairing file is missing; open Local Daemon setup to pair."
+        }
+
+        if !allowInteractiveJitPrompt {
+            let msg = silentFailureReason ?? "Pure JIT is required to run the embedded Linux daemon."
+            emitError(msg)
+            throw NSError(
+                domain: "RvvmDaemonManager",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey: msg]
+            )
         }
 
         emitStep("Waiting for JIT activation...")
@@ -482,7 +656,11 @@ internal final class RvvmDaemonManager {
 
         emitStep("Starting local deskfleet-daemon service...")
         let proxy = resolveSystemProxy()
-        _ = try execInGuest(RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy), timeoutSeconds: 20)
+        let screenBridge = screenBridgeProvider()
+        _ = try execInGuest(
+            RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy, screenBridge: screenBridge),
+            timeoutSeconds: 20
+        )
         try waitForGuestDaemonReady(initialLogOffset: initialOffset, timeoutSeconds: 60)
     }
 
@@ -493,7 +671,7 @@ internal final class RvvmDaemonManager {
             if let probeOut = try? execInGuest(RvvmDaemonCommands.daemonProbeCommand(logOffset: logOffset), timeoutSeconds: 10),
                let probe = RvvmDaemonCommands.parseDaemonProbeOutput(probeOut) {
                 if !probe.logChunk.isEmpty {
-                    onLog(probe.logChunk)
+                    appendAndEmitLog(probe.logChunk)
                 }
                 logOffset = probe.nextOffset
 
@@ -746,7 +924,7 @@ internal final class RvvmDaemonManager {
         return dir
     }
 
-    private func pairingFileURL() -> URL {
+    internal func pairingFileURL() -> URL {
         if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroupId) {
             return group.appendingPathComponent("pairingFile.plist")
         }

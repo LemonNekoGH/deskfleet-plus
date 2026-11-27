@@ -17,9 +17,12 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		DF4770012F00000100477001 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4770022F00000100477001 /* SampleHandler.swift */; };
 		DF4770032F00000100477001 /* OutlineAudioShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4770042F00000100477001 /* OutlineAudioShared.swift */; };
+		DF4770212F00000100477001 /* IosScreenShareShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4770222F00000100477001 /* IosScreenShareShared.swift */; };
 		DF4770052F00000100477001 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF4770062F00000100477001 /* ReplayKit.framework */; };
 		DF4770072F00000100477001 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF4770082F00000100477001 /* CoreMedia.framework */; };
 		DF4770092F00000100477001 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF47700A2F00000100477001 /* Accelerate.framework */; };
+		DF4770232F00000100477001 /* CoreVideo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF4770242F00000100477001 /* CoreVideo.framework */; };
+		DF4770252F00000100477001 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF4770262F00000100477001 /* VideoToolbox.framework */; };
 		DF47700B2F00000100477001 /* BroadcastUpload.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DF47700C2F00000100477001 /* BroadcastUpload.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DF5880012F00000100588001 /* HelperPrincipal.m in Sources */ = {isa = PBXBuildFile; fileRef = DF5880022F00000100588001 /* HelperPrincipal.m */; };
 		DF5880032F00000100588001 /* JitHelperHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF5880042F00000100588001 /* JitHelperHandler.swift */; };
@@ -84,9 +87,12 @@
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		DF4770022F00000100477001 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		DF4770042F00000100477001 /* OutlineAudioShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = OutlineAudioShared.swift; path = "../../../../packages/capacitor-bridge/ios/Sources/DeskFleetBridge/OutlineAudioShared.swift"; sourceTree = SOURCE_ROOT; };
+		DF4770222F00000100477001 /* IosScreenShareShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = IosScreenShareShared.swift; path = "../../../../packages/capacitor-bridge/ios/Sources/DeskFleetBridge/IosScreenShareShared.swift"; sourceTree = SOURCE_ROOT; };
 		DF4770062F00000100477001 /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
 		DF4770082F00000100477001 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
 		DF47700A2F00000100477001 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		DF4770242F00000100477001 /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
+		DF4770262F00000100477001 /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
 		DF47700C2F00000100477001 /* BroadcastUpload.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BroadcastUpload.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF4770102F00000100477001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		DF4770112F00000100477001 /* BroadcastUpload.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BroadcastUpload.entitlements; sourceTree = "<group>"; };
@@ -115,6 +121,8 @@
 				DF4770052F00000100477001 /* ReplayKit.framework in Frameworks */,
 				DF4770072F00000100477001 /* CoreMedia.framework in Frameworks */,
 				DF4770092F00000100477001 /* Accelerate.framework in Frameworks */,
+				DF4770232F00000100477001 /* CoreVideo.framework in Frameworks */,
+				DF4770252F00000100477001 /* VideoToolbox.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,6 +180,7 @@
 			children = (
 				DF4770022F00000100477001 /* SampleHandler.swift */,
 				DF4770042F00000100477001 /* OutlineAudioShared.swift */,
+				DF4770222F00000100477001 /* IosScreenShareShared.swift */,
 				DF4770102F00000100477001 /* Info.plist */,
 				DF4770112F00000100477001 /* BroadcastUpload.entitlements */,
 			);
@@ -195,6 +204,8 @@
 				DF4770062F00000100477001 /* ReplayKit.framework */,
 				DF4770082F00000100477001 /* CoreMedia.framework */,
 				DF47700A2F00000100477001 /* Accelerate.framework */,
+				DF4770242F00000100477001 /* CoreVideo.framework */,
+				DF4770262F00000100477001 /* VideoToolbox.framework */,
 				DF5880092F00000100588001 /* StikJIT.xcframework */,
 			);
 			name = Frameworks;
@@ -396,6 +407,7 @@
 			files = (
 				DF4770012F00000100477001 /* SampleHandler.swift in Sources */,
 				DF4770032F00000100477001 /* OutlineAudioShared.swift in Sources */,
+				DF4770212F00000100477001 /* IosScreenShareShared.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

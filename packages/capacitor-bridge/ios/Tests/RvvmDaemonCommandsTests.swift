@@ -244,4 +244,20 @@ final class RvvmDaemonCommandsTests: XCTestCase {
             "if [ -x '/opt/deskfleet/deskfleet-daemon' ]; then HOME=/root '/opt/deskfleet/deskfleet-daemon' settings 'set' 'worktrees.root' '/tmp/a'\"'\"'b'; else exit 127; fi"
         )
     }
+
+    func testEnsureDaemonRunningCommandExportsIosScreenBridgeEnvWhenProvided() {
+        let withoutBridge = RvvmDaemonCommands.ensureDaemonRunningCommand()
+        XCTAssertFalse(withoutBridge.contains("DESKFLEET_IOS_SCREEN_ADDR"))
+        XCTAssertFalse(withoutBridge.contains("DESKFLEET_IOS_SCREEN_TOKEN"))
+
+        let withBridge = RvvmDaemonCommands.ensureDaemonRunningCommand(
+            screenBridge: RvvmDaemonCommands.ScreenBridgeConfig(
+                host: "192.168.0.254",
+                port: 49152,
+                token: "deadbeef0123"
+            )
+        )
+        XCTAssertTrue(withBridge.contains("export DESKFLEET_IOS_SCREEN_ADDR='192.168.0.254:49152'"))
+        XCTAssertTrue(withBridge.contains("export DESKFLEET_IOS_SCREEN_TOKEN='deadbeef0123'"))
+    }
 }

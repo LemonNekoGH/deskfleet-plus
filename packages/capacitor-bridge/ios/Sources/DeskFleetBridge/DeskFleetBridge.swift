@@ -71,9 +71,18 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         CAPPluginMethod(name: "logTelemetryEvent", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "localDaemonStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonState", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonSetEnabled", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonStart", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "localDaemonLogs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "localDaemonPrepareEnrollment", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "localDaemonEnroll", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "localDaemonSettings", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "localDaemonSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "iosScreenShareStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "iosScreenShareProbeCoreDevice", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "iosScreenShareStartBroadcast", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "iosScreenShareStopBroadcast", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "iosScreenShareOpenLocalDevVpn", returnType: CAPPluginReturnPromise)
     ]
 
     nonisolated(unsafe) internal static weak var activePlugin: DeskFleetBridge?
@@ -87,6 +96,48 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
     private lazy var selectionFeedback = UISelectionFeedbackGenerator()
     private let localFiles = LocalFilesBridge()
     private var rvvmDaemon: RvvmDaemonManager?
+    private var screenBridgeServer: IosScreenBridgeServer?
+    private var pendingScreenShareCall: CAPPluginCall?
+    private var screenSharePickerView: RPSystemBroadcastPickerView?
+    private var screenShareLifecycleObservers: [NSObjectProtocol] = []
+    private var screenShareWaitTimer: DispatchSourceTimer?
+    private var screenSharePickerPresented = false
+    private var screenShareStartDeadlineMs: UInt64 = 0
+
+    private static func defaultPairingFileURL() -> URL {
+        if let group = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: IosScreenShareProtocol.appGroupId
+        ) {
+            return group.appendingPathComponent("pairingFile.plist")
+        }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return docs.appendingPathComponent("VM/pairingFile.plist")
+    }
+
+    private func screenBridge() -> IosScreenBridgeServer {
+        if let screenBridgeServer { return screenBridgeServer }
+        let server = IosScreenBridgeServer(
+            pairingFileURLProvider: { [weak self] in
+                self?.rvvmDaemon?.pairingFileURL() ?? Self.defaultPairingFileURL()
+            },
+            sharedStore: sharedStore,
+            onStateChanged: { [weak self] state in
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else { return }
+                self?.notifyListeners("iosScreenShareState", data: coerced)
+            },
+            onCapabilitiesChanged: { [weak self] in
+                self?.rvvmDaemon?.refreshCapabilitiesAsync()
+            }
+        )
+        screenBridgeServer = server
+        return server
+    }
+
+    public override func load() {
+        super.load()
+        daemon().autoStartIfEnabled()
+    }
 
     private func daemon() -> RvvmDaemonManager {
         if let rvvmDaemon { return rvvmDaemon }
@@ -102,10 +153,62 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
             fallbackMachineName: fallbackName,
             onLog: { [weak self] chunk in
                 self?.notifyListeners("localDaemonLog", data: ["chunk": chunk])
+            },
+            onStateChanged: { [weak self] state in
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else { return }
+                self?.notifyListeners("localDaemonState", data: coerced)
+            },
+            screenBridgeProvider: { [weak self] in
+                self?.screenBridge().ensureStarted()
             }
         )
         rvvmDaemon = manager
         return manager
+    }
+
+    @objc func localDaemonState(_ call: CAPPluginCall) {
+        let state = daemon().localDaemonState()
+        guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+            call.reject("Invalid local daemon state payload")
+            return
+        }
+        call.resolve(coerced)
+    }
+
+    @objc func localDaemonSetEnabled(_ call: CAPPluginCall) {
+        guard let enabled = call.getBool("enabled") else {
+            call.reject("Missing enabled flag")
+            return
+        }
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let state = manager.setLocalDaemonEnabled(enabled) { [weak self] in
+                self?.bridge?.viewController
+            }
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                call.reject("Invalid local daemon state payload")
+                return
+            }
+            call.resolve(coerced)
+        }
+    }
+
+    @objc func localDaemonStart(_ call: CAPPluginCall) {
+        let manager = daemon()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let state = manager.startLocalDaemon(interactive: true) { [weak self] in
+                self?.bridge?.viewController
+            }
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                call.reject("Invalid local daemon state payload")
+                return
+            }
+            call.resolve(coerced)
+        }
+    }
+
+    @objc func localDaemonLogs(_ call: CAPPluginCall) {
+        call.resolve(["output": daemon().recentLogs()])
     }
 
     @objc func localDaemonStatus(_ call: CAPPluginCall) {
@@ -510,13 +613,14 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
                 return
             }
             if store.isCurrentlyActive() {
+                store.setConsumerActive(OutlineAudioSharedStore.consumerOutlineAudio, active: true)
                 self.startPollingBands()
                 call.resolve(["started": true])
                 return
             }
 
             self.resolvePendingStart(started: false)
-            store.setStopRequested(false)
+            store.setConsumerActive(OutlineAudioSharedStore.consumerOutlineAudio, active: true)
             self.pendingStartCall = call
             self.pickerPresented = false
             self.startDeadlineMs = OutlineAudioSharedStore.nowMs() + 2_000
@@ -554,8 +658,175 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         DispatchQueue.main.async { [weak self] in
             self?.resolvePendingStart(started: false)
             self?.stopPollingBands()
-            self?.sharedStore?.setStopRequested(true)
+            self?.sharedStore?.setConsumerActive(OutlineAudioSharedStore.consumerOutlineAudio, active: false)
             call.resolve()
+        }
+    }
+
+    // MARK: - iOS Remote Screen Sharing (CoreDevice + ReplayKit)
+
+    @objc func iosScreenShareStatus(_ call: CAPPluginCall) {
+        let probe = call.getBool("probeCoreDevice") ?? false
+        let bridge = screenBridge()
+        _ = bridge.ensureStarted()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let state = bridge.refreshStatus(probeCoreDevice: probe)
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                call.reject("Invalid iOS screen share state payload")
+                return
+            }
+            call.resolve(coerced)
+        }
+    }
+
+    @objc func iosScreenShareProbeCoreDevice(_ call: CAPPluginCall) {
+        let bridge = screenBridge()
+        _ = bridge.ensureStarted()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let state = bridge.refreshStatus(probeCoreDevice: true)
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                call.reject("Invalid iOS screen share state payload")
+                return
+            }
+            call.resolve(coerced)
+        }
+    }
+
+    @objc func iosScreenShareStartBroadcast(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let root = self.bridge?.viewController, let store = self.sharedStore else {
+                call.reject("ReplayKit broadcast is unavailable.", "unavailable")
+                return
+            }
+            let bridge = self.screenBridge()
+            _ = bridge.ensureStarted()
+
+            if store.isCurrentlyActive() {
+                store.setConsumerActive(OutlineAudioSharedStore.consumerScreenShare, active: true)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let state = bridge.refreshStatus(probeCoreDevice: false)
+                    guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                        call.reject("Invalid iOS screen share state payload")
+                        return
+                    }
+                    call.resolve(coerced)
+                }
+                return
+            }
+
+            self.resolvePendingScreenShareStart(failure: nil)
+            store.setConsumerActive(OutlineAudioSharedStore.consumerScreenShare, active: true)
+            self.pendingScreenShareCall = call
+            self.screenSharePickerPresented = false
+            self.screenShareStartDeadlineMs = OutlineAudioSharedStore.nowMs() + 2_000
+
+            let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+            picker.preferredExtension = "\(Bundle.main.bundleIdentifier ?? "moe.remon.deskfleet.plus").BroadcastUpload"
+            picker.showsMicrophoneButton = false
+            picker.isHidden = true
+            picker.isUserInteractionEnabled = false
+            root.view.addSubview(picker)
+            self.screenSharePickerView = picker
+
+            guard let button = picker.subviews.compactMap({ $0 as? UIButton }).first else {
+                self.resolvePendingScreenShareStart(failure: "Broadcast picker is unavailable.")
+                return
+            }
+
+            let center = NotificationCenter.default
+            self.screenShareLifecycleObservers = [
+                center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.screenSharePickerPresented = true
+                    self?.screenShareStartDeadlineMs = .max
+                },
+                center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                    guard let self, self.screenSharePickerPresented else { return }
+                    self.screenShareStartDeadlineMs = OutlineAudioSharedStore.nowMs() + 2_000
+                }
+            ]
+
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + .milliseconds(120), repeating: .milliseconds(120))
+            timer.setEventHandler { [weak self] in
+                self?.pollScreenShareBroadcastStart()
+            }
+            self.screenShareWaitTimer = timer
+            timer.resume()
+            button.sendActions(for: .touchUpInside)
+        }
+    }
+
+    @objc func iosScreenShareStopBroadcast(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return call.reject("Bridge unavailable") }
+            self.resolvePendingScreenShareStart(failure: nil)
+            self.sharedStore?.setConsumerActive(OutlineAudioSharedStore.consumerScreenShare, active: false)
+            let bridge = self.screenBridge()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let state = bridge.refreshStatus(probeCoreDevice: false)
+                guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                    call.reject("Invalid iOS screen share state payload")
+                    return
+                }
+                call.resolve(coerced)
+            }
+        }
+    }
+
+    @objc func iosScreenShareOpenLocalDevVpn(_ call: CAPPluginCall) {
+        let scheme = RvvmJitRouting.bundleCallbackScheme()
+        let url = RvvmJitRouting.localDevVpnEnableURL(callbackScheme: scheme)
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url, options: [:]) { opened in
+                if opened {
+                    call.resolve()
+                } else {
+                    call.reject("LocalDevVPN is not installed on this device.")
+                }
+            }
+        }
+    }
+
+    private func pollScreenShareBroadcastStart() {
+        guard let store = sharedStore else {
+            resolvePendingScreenShareStart(failure: "Broadcast store unavailable.")
+            return
+        }
+        let nowMs = OutlineAudioSharedStore.nowMs()
+        if store.isCurrentlyActive(nowMs: nowMs) {
+            resolvePendingScreenShareStart(failure: nil)
+            return
+        }
+        if nowMs >= screenShareStartDeadlineMs {
+            store.setConsumerActive(OutlineAudioSharedStore.consumerScreenShare, active: false)
+            resolvePendingScreenShareStart(
+                failure: screenSharePickerPresented ? nil : "Broadcast picker did not appear."
+            )
+        }
+    }
+
+    private func resolvePendingScreenShareStart(failure: String?) {
+        screenShareWaitTimer?.cancel()
+        screenShareWaitTimer = nil
+        for observer in screenShareLifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        screenShareLifecycleObservers.removeAll()
+        screenSharePickerView?.removeFromSuperview()
+        screenSharePickerView = nil
+
+        guard let call = pendingScreenShareCall else { return }
+        pendingScreenShareCall = nil
+        if let failure {
+            call.reject(failure, "unavailable")
+            return
+        }
+        let bridge = screenBridge()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let state = bridge.refreshStatus(probeCoreDevice: false)
+            guard let coerced = JSTypes.coerceDictionaryToJSObject(state) else {
+                call.reject("Invalid iOS screen share state payload")
+                return
+            }
+            call.resolve(coerced)
         }
     }
 
@@ -616,7 +887,10 @@ public class DeskFleetBridge: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPr
         let speech = speechInput
         DispatchQueue.main.async { speech?.dispose() }
         pollTimer?.cancel()
+        screenShareWaitTimer?.cancel()
         for observer in appLifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in screenShareLifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        screenBridgeServer?.stop()
         let session = authSession
         authSession = nil
         if Thread.isMainThread {

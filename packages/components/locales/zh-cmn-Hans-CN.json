@@ -847,6 +847,32 @@
       "pairingHint": "打开「开发者选项 > 无线调试 > 使用配对码配对设备」。检测到本机配对服务时，DeskFleet 也会通过通知直接提示输入配对码。",
       "invalidPairInput": "请输入有效的端口（1–65535）和数字配对码。"
     },
+    "iosScreenShare": {
+      "title": "iOS 远程屏幕与控制",
+      "statusLabel": "当前模式",
+      "statusDescription": "控制此 iOS 设备通过 DeskFleet 被远程访问时的画面共享与输入控制方式。",
+      "mode": {
+        "coredeviceControl": "CoreDevice（画面 + 远程控制）",
+        "coredeviceViewOnly": "CoreDevice（仅画面）",
+        "replaykit": "ReplayKit 屏幕直播（仅观看）",
+        "unavailable": "未启用"
+      },
+      "coreDeviceLabel": "CoreDevice 远程控制",
+      "coreDeviceDescription": "通过 LocalDevVPN 传输 HEVC 画面并注入触控、键盘、实体按键与剪贴板事件，无需弹出屏幕录制提示。",
+      "coreDevice": {
+        "readyControl": "已就绪（画面 + 触控/键盘）",
+        "readyViewOnly": "已就绪（仅画面）",
+        "missingPairing": "需要配对文件",
+        "vpnInactive": "LocalDevVPN 未开启",
+        "unavailable": "不可用"
+      },
+      "probeCoreDevice": "检测 CoreDevice",
+      "openLocalDevVpn": "打开 LocalDevVPN",
+      "replayKitLabel": "ReplayKit 屏幕直播",
+      "replayKitDescription": "当 CoreDevice 未启用时，使用 DeskFleet Plus 屏幕直播扩展进行仅观看画面采集。",
+      "startBroadcast": "开始屏幕直播",
+      "stopBroadcast": "停止屏幕直播"
+    },
     "thisComputer": "本机",
     "launchAtStartup": "开机自启",
     "launchAtStartupDescription": "登录系统时自动打开 DeskFleet。",
@@ -2408,5 +2434,15 @@
     "connectErrorTitle": "无法连接预览",
     "retry": "重试",
     "unavailable": "当前平台不支持网页预览。"
+  },
+  "localDaemon": {
+    "notStartedTitle": "本机 Daemon 未启动",
+    "notStartedDescription": "本机内置 Linux 守护进程未能自动启动，请点击下方按钮完成启动（无需重新配对）。",
+    "openSetup": "启动本机 Daemon",
+    "recoveryTitle": "启动本机 Daemon",
+    "recoveryDescription": "此设备已完成配对，启动内置 Linux 守护进程后将自动重新接入团队，无需再次配对。",
+    "startAction": "启动",
+    "starting": "正在启动…",
+    "startFailed": "本机 Daemon 启动失败，请检查 LocalDevVPN 或 JIT 状态后重试。"
   }
 }

@@ -13,6 +13,12 @@ internal enum RvvmDaemonCommands {
         }
     }
 
+    struct ScreenBridgeConfig: Equatable {
+        let host: String
+        let port: UInt16
+        let token: String
+    }
+
     static let daemonBinaryPath = "/opt/deskfleet/deskfleet-daemon"
     static let daemonPidFile = "/run/deskfleet-daemon.pid"
     static let daemonEnvFile = "/run/deskfleet-daemon.env"
@@ -187,7 +193,10 @@ internal enum RvvmDaemonCommands {
         """
     }
 
-    static func ensureDaemonRunningCommand(proxy: ProxyConfig? = nil) -> String {
+    static func ensureDaemonRunningCommand(
+        proxy: ProxyConfig? = nil,
+        screenBridge: ScreenBridgeConfig? = nil
+    ) -> String {
         let stripNewlines: (String) -> String = {
             $0.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
         }
@@ -197,6 +206,11 @@ internal enum RvvmDaemonCommands {
             "export GODEBUG='asyncpreemptoff=1'",
             "export NODE_OPTIONS=\(shellQuote(nodeOptions(proxy: proxy)))",
         ]
+        if let screenBridge, screenBridge.port > 0, !screenBridge.host.isEmpty {
+            let addr = "\(stripNewlines(screenBridge.host)):\(screenBridge.port)"
+            envLines.append("export DESKFLEET_IOS_SCREEN_ADDR=\(shellQuote(addr))")
+            envLines.append("export DESKFLEET_IOS_SCREEN_TOKEN=\(shellQuote(stripNewlines(screenBridge.token)))")
+        }
         if let proxy, proxy.hasAny {
             envLines.append("export NODE_USE_ENV_PROXY=1")
             if let httpProxy = proxy.httpProxy, !httpProxy.isEmpty {

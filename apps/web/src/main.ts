@@ -4,6 +4,8 @@ import {
   DeskFleetBridge,
   attachLocalEnrollment,
   createCapacitorFilesApi,
+  createCapacitorIosScreenShareApi,
+  createCapacitorLocalDaemonControl,
   createCapacitorNativeDesktopApi,
   createCapacitorNetworkDiagnosticsApi,
   createCapacitorOutlineAudioApi,
@@ -48,7 +50,11 @@ if (Capacitor.getPlatform() === "ios") {
   if (adapter.central) {
     attachLocalEnrollment(adapter.central)
   }
+  const iosLocalDaemon = createCapacitorLocalDaemonControl()
+  adapter.settings = { ...adapter.settings, ...iosLocalDaemon.settings }
+  adapter.localDaemon = iosLocalDaemon.control
   adapter.outlineAudio = createCapacitorOutlineAudioApi()
+  adapter.iosScreenShare = createCapacitorIosScreenShareApi()
 }
 if (Capacitor.isNativePlatform() && adapter.central) {
   adapter.ports = createCapacitorPortsApi(adapter.central)

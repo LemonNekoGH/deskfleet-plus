@@ -1,5 +1,6 @@
 import type { PluginListenerHandle } from "@capacitor/core"
 import type { CentralApi, LocalEnrollment, LocalMachineStatus } from "@deskfleet/client/central"
+import type { LocalAgentSettingsApi, LocalAgentState, LocalDaemonControlApi } from "@deskfleet/client/local-agent"
 import type { SettingsApi } from "@deskfleet/client/settings"
 import { remoteAgentSettings } from "@deskfleet/protocol/remote-agent-settings"
 import { validateWorktreePreferences } from "@deskfleet/protocol/worktree-preferences"
@@ -20,6 +21,83 @@ export interface LocalDaemonBridgePlugin {
     eventName: "localDaemonLog",
     listenerFunc: (data: { chunk: string }) => void,
   ): Promise<PluginListenerHandle>
+}
+
+export interface LocalDaemonLifecycleBridgePlugin {
+  localDaemonState(): Promise<LocalAgentState>
+  localDaemonSetEnabled(options: { enabled: boolean }): Promise<LocalAgentState>
+  localDaemonStart(): Promise<LocalAgentState>
+  localDaemonLogs?(): Promise<{ output: string }>
+  addListener?(
+    eventName: "localDaemonState",
+    listenerFunc: (state: LocalAgentState) => void,
+  ): Promise<PluginListenerHandle>
+  addListener?(
+    eventName: "localDaemonLog",
+    listenerFunc: (data: { chunk: string }) => void,
+  ): Promise<PluginListenerHandle>
+}
+
+export interface LocalDaemonLifecycleBinding {
+  settings: LocalAgentSettingsApi
+  control: LocalDaemonControlApi
+}
+
+function normalizeLocalAgentState(raw: unknown): LocalAgentState {
+  const record = isPlainRecord(raw) ? raw : {}
+  const status = record.status
+  const validStatus: LocalAgentState["status"] =
+    status === "stopped" || status === "starting" || status === "running" || status === "stopping" || status === "error"
+      ? status
+      : "stopped"
+  const error = typeof record.error === "string" && record.error.trim().length > 0 ? record.error : undefined
+  return {
+    enabled: Boolean(record.enabled),
+    status: validStatus,
+    ...(error ? { error } : {}),
+  }
+}
+
+export function createCapacitorLocalDaemonControl(
+  plugin: LocalDaemonLifecycleBridgePlugin,
+): LocalDaemonLifecycleBinding {
+  return {
+    settings: {
+      get: async () => normalizeLocalAgentState(await plugin.localDaemonState()),
+      setLocalAgentEnabled: async enabled =>
+        normalizeLocalAgentState(await plugin.localDaemonSetEnabled({ enabled })),
+      onChanged(listener) {
+        if (!plugin.addListener) return () => {}
+        let active = true
+        const handle = plugin.addListener("localDaemonState", state => {
+          if (active) listener(normalizeLocalAgentState(state))
+        })
+        return () => {
+          active = false
+          void handle.then(item => item.remove()).catch(() => {})
+        }
+      },
+    },
+    control: {
+      start: async () => normalizeLocalAgentState(await plugin.localDaemonStart()),
+      recentOutput: async () => {
+        if (!plugin.localDaemonLogs) return ""
+        const result = await plugin.localDaemonLogs()
+        return typeof result?.output === "string" ? result.output : ""
+      },
+      onOutput(listener) {
+        if (!plugin.addListener) return () => {}
+        let active = true
+        const handle = plugin.addListener("localDaemonLog", ({ chunk }) => {
+          if (active && typeof chunk === "string" && chunk.length > 0) listener(chunk)
+        })
+        return () => {
+          active = false
+          void handle.then(item => item.remove()).catch(() => {})
+        }
+      },
+    },
+  }
 }
 
 export interface LocalDaemonSettingsBridgePlugin {

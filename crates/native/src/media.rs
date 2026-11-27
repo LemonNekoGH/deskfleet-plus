@@ -72,6 +72,10 @@ pub async fn supported_video_codecs(display_id: u32) -> Result<Vec<String>, Medi
         if crate::android_scrcpy::is_configured() {
             return crate::android_scrcpy::supported_video_codecs_sync(display_id);
         }
+        #[cfg(target_os = "linux")]
+        if crate::ios_screen::is_configured() {
+            return crate::ios_screen::supported_video_codecs_sync(display_id);
+        }
         #[cfg(windows)]
         if let Some(mut client) = crate::windows_desktop::Client::connect()? {
             return client.codecs(display_id);
@@ -94,6 +98,7 @@ pub async fn supported_video_codecs(display_id: u32) -> Result<Vec<String>, Medi
 pub async fn displays() -> Result<Vec<Display>, MediaError> {
     #[cfg(target_os = "linux")]
     if !crate::android_scrcpy::is_configured()
+        && !crate::ios_screen::is_configured()
         && deskfleet_linux_desktop::backend() == deskfleet_linux_desktop::Backend::Wayland
     {
         deskfleet_wayland::restore_access()
@@ -104,6 +109,10 @@ pub async fn displays() -> Result<Vec<Display>, MediaError> {
         #[cfg(target_os = "linux")]
         if crate::android_scrcpy::is_configured() {
             return Ok(crate::android_scrcpy::displays_sync()?);
+        }
+        #[cfg(target_os = "linux")]
+        if crate::ios_screen::is_configured() {
+            return Ok(crate::ios_screen::displays_sync()?);
         }
         #[cfg(windows)]
         if let Some(mut client) = crate::windows_desktop::Client::connect()? {
@@ -218,6 +227,8 @@ enum CaptureSource {
     Local(Box<CapturePipeline>),
     #[cfg(target_os = "linux")]
     Android(crate::android_scrcpy::ScrcpyCapture),
+    #[cfg(target_os = "linux")]
+    Ios(crate::ios_screen::IosScreenCapture),
     #[cfg(windows)]
     Service(crate::windows_desktop::Client),
 }
@@ -227,6 +238,12 @@ impl CaptureSource {
         #[cfg(target_os = "linux")]
         if crate::android_scrcpy::is_configured() {
             return Ok(Self::Android(crate::android_scrcpy::ScrcpyCapture::open(
+                config, codec, audio,
+            )?));
+        }
+        #[cfg(target_os = "linux")]
+        if crate::ios_screen::is_configured() {
+            return Ok(Self::Ios(crate::ios_screen::IosScreenCapture::open(
                 config, codec, audio,
             )?));
         }
@@ -260,6 +277,8 @@ impl CaptureSource {
             }
             #[cfg(target_os = "linux")]
             Self::Android(client) => client.poll(keyframe, video_paused),
+            #[cfg(target_os = "linux")]
+            Self::Ios(client) => client.poll(keyframe, estimate_bps, video_paused),
             #[cfg(windows)]
             Self::Service(client) => {
                 let target = estimate_bps.map(|estimate| estimate as u32);
@@ -273,6 +292,8 @@ impl CaptureSource {
             Self::Local(pipeline) => (*pipeline).stop(),
             #[cfg(target_os = "linux")]
             Self::Android(client) => client.stop(),
+            #[cfg(target_os = "linux")]
+            Self::Ios(client) => client.stop(),
             #[cfg(windows)]
             Self::Service(mut client) => client.stop(),
         }

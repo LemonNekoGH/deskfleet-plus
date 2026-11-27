@@ -13,3 +13,12 @@ export interface LocalAgentSettingsApi {
   setLocalAgentEnabled(enabled: boolean): Promise<LocalAgentState>
   onChanged(listener: (state: LocalAgentState) => void): () => void
 }
+
+export interface LocalDaemonControlApi {
+  /** Starts or retries the embedded local daemon without re-pairing the machine. */
+  start(): Promise<LocalAgentState>
+  /** Returns buffered ANSI startup output from the most recent startup attempt. */
+  recentOutput?(): Promise<string>
+  /** Subscribes to live ANSI startup output chunks from the embedded local daemon. */
+  onOutput?: (listener: (chunk: string) => void) => () => void
+}

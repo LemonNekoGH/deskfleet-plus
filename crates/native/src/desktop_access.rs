@@ -49,6 +49,9 @@ pub async fn supported() -> Result<bool, String> {
         if crate::android_scrcpy::is_configured() {
             return crate::android_scrcpy::supported().await;
         }
+        if crate::ios_screen::is_configured() {
+            return crate::ios_screen::supported().await;
+        }
         let selected = backend();
         if selected == Backend::Unavailable {
             return Ok(false);
@@ -90,6 +93,10 @@ pub async fn request_linux(
             let _ = directory;
             return crate::android_scrcpy::check_access().await;
         }
+        if crate::ios_screen::is_configured() {
+            let _ = directory;
+            return crate::ios_screen::check_access().await;
+        }
         match backend() {
             Backend::Wayland => {
                 let access =
@@ -127,6 +134,9 @@ pub async fn check_linux() -> Result<DesktopAccess, String> {
         if crate::android_scrcpy::is_configured() {
             return crate::android_scrcpy::check_access().await;
         }
+        if crate::ios_screen::is_configured() {
+            return crate::ios_screen::check_access().await;
+        }
         match backend() {
             Backend::Wayland => {
                 let access = deskfleet_wayland::check_access();
@@ -156,7 +166,10 @@ pub async fn check_linux() -> Result<DesktopAccess, String> {
 /// Wait for shared authorization changes. X11 has no retained Portal grant.
 pub async fn wait_linux(seen: u32) -> Option<u32> {
     #[cfg(target_os = "linux")]
-    if !crate::android_scrcpy::is_configured() && backend() == Backend::Wayland {
+    if !crate::android_scrcpy::is_configured()
+        && !crate::ios_screen::is_configured()
+        && backend() == Backend::Wayland
+    {
         return deskfleet_wayland::wait_for_access_change(seen).await;
     }
     let _ = seen;
@@ -167,7 +180,10 @@ pub async fn wait_linux(seen: u32) -> Option<u32> {
 /// X11 connections are scoped to their capture/input workers instead.
 pub async fn close_linux() -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    if !crate::android_scrcpy::is_configured() && backend() == Backend::Wayland {
+    if !crate::android_scrcpy::is_configured()
+        && !crate::ios_screen::is_configured()
+        && backend() == Backend::Wayland
+    {
         return deskfleet_wayland::shutdown()
             .await
             .map_err(|error| error.to_string());

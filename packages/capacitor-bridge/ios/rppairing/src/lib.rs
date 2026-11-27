@@ -18,6 +18,16 @@ use std::time::Duration;
 
 use idevice::remote_pairing::{PairableHost, PairableHostInfo, RpPairingFile, RpPairingSocket};
 
+mod coredevice_input;
+mod coredevice_media;
+mod coredevice_screen;
+mod coredevice_tunnel;
+pub use coredevice_screen::{
+    deskfleet_coredevice_probe, deskfleet_coredevice_session_request_keyframe,
+    deskfleet_coredevice_session_send_input, deskfleet_coredevice_session_start,
+    deskfleet_coredevice_session_stop,
+};
+
 /// Called once listening: the Bonjour service name, port and TXT records to advertise.
 pub type ReadyCallback = extern "C" fn(
     ctx: *mut c_void,

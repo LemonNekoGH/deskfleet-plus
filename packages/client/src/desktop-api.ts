@@ -22,6 +22,8 @@ import type { NetworkDiagnosticsApi } from "./network-diagnostics.ts"
 import type { OutlineAudioApi } from "./outline-audio.ts"
 import type { ApplicationApi } from "./application.ts"
 import type { SpeechApi } from "./speech.ts"
+import type { IosScreenShareApi } from "./ios-screen-share.ts"
+import type { LocalDaemonControlApi } from "./local-agent.ts"
 import type { WirelessAdbApi } from "./wireless-adb.ts"
 
 /** The host platform adapter configured for the shared application. */
@@ -35,6 +37,9 @@ export interface DeskfleetDesktopApi {
    */
   probeLocalDaemonSettings?: () => Promise<boolean>
   wirelessAdb?: WirelessAdbApi
+  iosScreenShare?: IosScreenShareApi
+  /** Mobile embedded local daemon control (start/retry + live logs without re-pairing). */
+  localDaemon?: LocalDaemonControlApi
   central?: CentralApi
   /** Only the Web host exposes site administration. */
   siteAdministration?: SiteAdministrationApi

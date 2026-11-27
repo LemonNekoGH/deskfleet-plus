@@ -2,6 +2,8 @@
 
 #[cfg(any(target_os = "linux", test))]
 pub(crate) mod android_scrcpy;
+#[cfg(any(target_os = "linux", test))]
+pub(crate) mod ios_screen;
 pub mod desktop_access;
 pub mod filesystem_permissions;
 pub mod input;

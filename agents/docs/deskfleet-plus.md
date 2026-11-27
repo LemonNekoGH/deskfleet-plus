@@ -22,14 +22,20 @@ without root access, external Termux setup, or a separate desktop host.
     reconnection, optional `tcpip 5555` keep-alive, and daemon capability refresh
     (`WirelessAdbManager.kt`, `WirelessAdbController.kt`, `packages/client/src/wireless-adb.ts`,
     `packages/components/src/components/settings/AndroidWirelessAdbSettings.vue`).
-  - **iOS embedded runtime**: Pure-JIT `librvvm` RISC-V 64 Linux guest with iOS W^X RVJIT and
-    RAM-donor hooks (`packages/capacitor-bridge/ios/rvvm/ios-jit.patch`, `RvvmHostBridge.c`,
+  - **iOS embedded runtime**: Pure-JIT `librvvm` RISC-V 64 Linux guest with iOS W^X RVJIT,
+    RAM-donor hooks, and host-loopback TCP routing (`192.168.0.254` → host `127.0.0.1`)
+    (`packages/capacitor-bridge/ios/rvvm/ios-jit.patch`, `RvvmHostBridge.c`,
     `RvvmDaemonManager.swift`, `RvvmDaemonCommands.swift`), UART1 framed command channel,
     host DNS/proxy/clock sync, `DeskFleetJITHelper.appex` (`StikJIT.xcframework` + `xpc_shmem`
     RAM donation via `RvvmRamDonor.m` / `HelperPrincipal.m`), iOS 27+ on-device RemotePairing
-    (`packages/capacitor-bridge/ios/rppairing/`, `RvvmOnDevicePairing.swift`), silent-audio
-    background keep-alive (`RvvmBackgroundKeepAlive.swift`), and pre-baked Ubuntu 24.04
-    `riscv64` guest images (`scripts/build-ios-riscv64-guest.ts`).
+    and CoreDevice screen/HID/pasteboard streaming (`packages/capacitor-bridge/ios/rppairing/`,
+    `RvvmOnDevicePairing.swift`), ReplayKit VideoToolbox fallback inside `BroadcastUpload.appex`
+    (coexisting with `OutlineAudioSharedStore`), iOS host screen bridge and hardware VideoToolbox
+    transcoding (`IosScreenShareShared.swift`, `IosScreenBridgeServer.swift`,
+    `IosCoreDeviceSessionManager.swift`, `IosCoreDeviceVideoPipeline.swift`), guest native backend
+    (`crates/native/src/ios_screen.rs`), silent-audio background keep-alive
+    (`RvvmBackgroundKeepAlive.swift`), and pre-baked Ubuntu 24.04 `riscv64` guest images
+    (`scripts/build-ios-riscv64-guest.ts`).
   - **`linux/riscv64` + Box64 agent compatibility**: `packages/agents/antigravity/src/index.ts`
     (Box64 check, `install.sh` arch patch, `GODEBUG=asyncpreemptoff=1`, `linux_amd64` manifest,
     relaxed timeouts) and `packages/agents/core/src/acp.ts` (90 s ACP init timeout on `riscv64`).
@@ -158,10 +164,14 @@ fork-specific behavior:
   - `scripts/{package-ios-release,prepare-ios-signing,publish-ios-release}*.ts`
 - **Mobile runtime & bridge wiring**:
   - `apps/web/src/main.ts` (keep `https://deskfleet.yetanother.ai` native fallback,
-    `attachLocalEnrollment`, `createLocalDaemonHostSettings`, `createCapacitorWirelessAdbApi`)
+    `attachLocalEnrollment`, `createLocalDaemonHostSettings`, `createCapacitorWirelessAdbApi`,
+    `createCapacitorIosScreenShareApi`)
   - `packages/capacitor-bridge/**` (Android `proot` / `LocalDaemonService` / Wireless ADB,
-    iOS `librvvm` / `DeskFleetJITHelper` / `rppairing` / `RvvmRamDonor` / `local-daemon.ts` /
-    `wireless-adb.ts`)
+    iOS `librvvm` / `DeskFleetJITHelper` / `rppairing` / `RvvmRamDonor` / `IosScreenBridgeServer` /
+    `IosCoreDeviceSessionManager` / `IosCoreDeviceVideoPipeline` / `IosScreenShareShared` /
+    `local-daemon.ts` / `wireless-adb.ts` / `ios-screen-share.ts`)
+  - `crates/native/src/ios_screen.rs` (and minimal Linux-only dispatch hooks in
+    `crates/native/src/{lib,media,desktop_access,input}.rs`)
   - `Cargo.toml` (keep `"packages/capacitor-bridge/ios/rppairing"` in workspace `exclude`)
   - `scripts/build-android-viewer*.ts`, `scripts/build-ios-viewer*.ts`,
     `scripts/build-ios-riscv64-guest*.ts`, `.github/workflows/ios-guest-riscv64.yml`
@@ -169,10 +179,10 @@ fork-specific behavior:
   - `packages/agents/antigravity/src/index.ts`, `packages/agents/core/src/acp.ts`,
     `apps/daemon/src/providers/setup.test.ts`
 - **Mobile UI hooks & docs**:
-  - `packages/client/src/{central,desktop-api,wireless-adb}.ts`
-  - `packages/components/` (`AddMachineDialog.vue`, `PreferencesSettings.vue`,
-    `WorktreeSettings.vue`, `SettingsView.vue`, `AndroidWirelessAdbSettings.vue`,
-    `useLocalDaemonSettings.ts`, and `locales/*.json` keys)
+  - `packages/client/src/{central,desktop-api,wireless-adb,ios-screen-share}.ts`
+  - `packages/components/` (`AddMachineDialog.vue`, `LocalDaemonRecoveryDialog.vue`, `PreferencesSettings.vue`,
+    `WorktreeSettings.vue`, `SettingsView.vue`, `NewSessionView.vue`, `AndroidWirelessAdbSettings.vue`,
+    `IosScreenShareSettings.vue`, `useLocalDaemonSettings.ts`, and `locales/*.json` keys)
   - `AGENTS.md` (keep the `DeskFleet Plus (Mobile Fork Scope)` section; accept upstream rules below),
     `THIRD_PARTY_NOTICES.md`, `docs/.vitepress/config.ts` (keep `DeskFleet Plus` sidebar links),
     `docs/content/{,zh/,ja/}guide/android.md` (keep the DeskFleet Plus note), and
