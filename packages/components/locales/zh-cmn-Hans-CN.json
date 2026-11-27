@@ -1403,11 +1403,16 @@
     "notGit": "不是 Git 检出",
     "clean": "没有变更",
     "gitUnavailable": "可查看在线本机上会话的 Git 变更。",
-    "gitLive": "实时更新中",
     "gitPaused": "实时更新已暂停",
     "gitStale": "正在显示上次加载的变更。",
     "gitLoading": "正在加载 Git 变更…",
     "refreshGit": "刷新 Git 变更",
+    "changeScope": "对比范围",
+    "changeMode": {
+      "base": "基线分支",
+      "uncommitted": "未提交"
+    },
+    "comparingTo": "对比 {branch}",
     "detachedHead": "分离的 HEAD",
     "noCommits": "尚无提交",
     "openDiff": "查看 {path} 的{kind}差异",
@@ -1427,6 +1432,7 @@
     "truncatedDiff": "差异内容较大，仅显示开头部分。",
     "addLineComment": "评论第 {line} 行",
     "changeKind": {
+      "branch": "分支变更",
       "staged": "已暂存",
       "unstaged": "未暂存",
       "untracked": "未跟踪"
@@ -1450,6 +1456,7 @@
   },
   "catalog": {
     "local": "本地",
+    "machines": "机器",
     "workspaces": "工作区",
     "loading": "正在加载工作区…",
     "refresh": "刷新",
@@ -1588,12 +1595,19 @@
     "plan": "计划",
     "steered": "已引导当前轮次",
     "backlog": "排队中",
+    "backlogQueued": "{n} 条消息排队中",
+    "backlogFailed": "{n} 条异常",
+    "backlogExpand": "展开",
+    "backlogCollapse": "收起",
     "steer": "立即引导",
     "withdraw": "撤回",
     "retryInput": "重试投递",
     "uncertainInput": "无法确认是否已投递。再次提交前请检查对话。",
     "permissions": "权限",
     "permissionRequired": "需要授权",
+    "permissionMoreOptions": "更多选项",
+    "permissionPrevious": "上一条权限请求",
+    "permissionNext": "下一条权限请求",
     "questions": {
       "title": "需要你的回答",
       "urlTitle": "在浏览器中继续",
@@ -1924,7 +1938,12 @@
     "machineNameFor": "{name} 的新名称",
     "removeMachineLabel": "移除 {name}",
     "removeMachineTitle": "移除 {name}？",
-    "removeMachineDescription": "该机器在当前团队的凭据将被吊销，与此团队的连接会关闭。文件和历史记录会保留，重新加入后可继续访问。其他团队的连接不受影响。"
+    "removeMachineDescription": "该机器在当前团队的凭据将被吊销，与此团队的连接会关闭。文件和历史记录会保留，重新加入后可继续访问。其他团队的连接不受影响。",
+    "dangerZone": "危险操作",
+    "deleteTeam": "删除团队",
+    "deleteTeamDescription": "永久删除此团队、成员关系、邀请和设置。仍有机器或账单记录的团队无法删除。",
+    "deleteTeamTitle": "删除 {team}？",
+    "deleteTeamConfirmDescription": "所有成员将立即失去访问权限。此操作无法撤销。"
   },
   "addMachine": {
     "title": "向 {team} 添加机器",
@@ -1984,7 +2003,7 @@
     "openResource": "打开", "previewUnavailableLocal": "无法预览此文件，可以使用其他应用打开。",
     "showInFinder": "在访达中显示", "showInExplorer": "在文件资源管理器中显示", "showInFileManager": "在文件管理器中显示",
     "previewUnavailable": "无法预览此文件，可以下载后查看。", "downloadResource": "下载",
-    "previewHtml": "预览", "viewSource": "源码",
+    "preview": "预览", "viewSource": "源码",
     "csvEmpty": "此 CSV 文件为空。",
     "csvPreviewLimit": "显示前 {rows} 行和前 {columns} 列。",
     "resourceUnavailable": "此资源暂不可用，请连接所属机器后重试。",
@@ -2407,6 +2426,7 @@
     }
   },
   "sidebar": {
+    "chat": "聊天",
     "filterLabel": "筛选会话",
     "filterAll": "全部",
     "filterUnread": "未读",

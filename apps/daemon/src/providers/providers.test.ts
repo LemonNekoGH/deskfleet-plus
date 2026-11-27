@@ -99,6 +99,7 @@ test("templates resolve their own binary defaults and cannot change after creati
   assert.deepEqual(registry.resolve(deepseek.id).config, { name: "DeepSeek Harness", binaryPath: undefined, env: { DEEPSEEK_API_KEY: "secret", DESKFLEET_DSH_CREDENTIALS_PATH: join(directory, "deepseek-harness", ".credentials.yaml") } })
   const antigravity = await registry.create({ template: "antigravity", name: "Antigravity", env: { GEMINI_HOME: "/account/antigravity" } })
   assert.equal(registry.resolve(antigravity.id).provider.id, "antigravity")
+  assert.equal(registry.resolve(antigravity.id).provider.readUsage, undefined)
   assert.equal(registry.snapshot().templates.find(template => template.id === "antigravity")?.defaultBinaryPath, "agy")
   assert.deepEqual(registry.resolve(antigravity.id).config, { name: "Antigravity", binaryPath: "agy", env: { GEMINI_HOME: "/account/antigravity" } })
   assert.throws(() => registry.update(custom.id, { template: "codex", name: "Changed", env: {} } as AgentProviderSettings), /template is fixed/u)
@@ -270,19 +271,23 @@ test("Antigravity launches agy acp without interactive authentication and migrat
   await registry.init()
   assert.equal(registry.get("legacy-antigravity").binaryPath, undefined)
   assert.equal(registry.resolve("legacy-antigravity").config.binaryPath, "agy")
-  const configured = await registry.create({ template: "antigravity", name: "Antigravity", binaryPath, env: { DESKFLEET_TEST_AGENT_MODE: "antigravity-background" } })
+  const configured = await registry.create({ template: "antigravity", name: "Antigravity", binaryPath, env: { DESKFLEET_TEST_AGENT_MODE: "antigravity" } })
   const { provider, config } = registry.resolve(configured.id)
-  const updates: string[] = []
-  const connection = await provider.connect(config, { capabilities: { subagents: true }, onUpdate(notification) { updates.push(notification.update.sessionUpdate) } })
+  const connection = await provider.connect(config, { onUpdate() {} })
   t.after(() => connection.close())
-  assert.deepEqual((connection.initialization._meta?.launch as { args?: string[] }).args, ["acp"])
+  assert.deepEqual((connection.initialization._meta?.launch as { args?: string[] }).args, ["acp", "--process-per-session"])
   const sessionId = (await connection.newSession({ cwd: directory, mcpServers: [] })).sessionId
   assert.match(sessionId, /^fixture-session-/u)
-  const started = Date.now()
   assert.deepEqual(await connection.prompt({ sessionId, prompt: [{ type: "text", text: "go" }] }), { stopReason: "end_turn" })
-  assert.ok(Date.now() - started >= 80, "the wrapper must wait for the running subagent before completing the turn")
-  assert.equal(updates.filter(update => update === "subagent_update").length, 2)
   await connection.close()
+  const customGeminiHome = join(directory, "gemini-home")
+  const scopedConnection = await provider.connect({ ...config, env: { ...config.env, GEMINI_HOME: customGeminiHome } }, { onUpdate() {} })
+  t.after(() => scopedConnection.close())
+  assert.deepEqual(
+    (scopedConnection.initialization._meta?.launch as { args?: string[] }).args,
+    ["acp", "--process-per-session", "--gemini-dir", customGeminiHome],
+  )
+  await scopedConnection.close()
   await assert.rejects(registry.test({ template: "antigravity", name: "Antigravity", binaryPath, env: { DESKFLEET_TEST_AGENT_MODE: "antigravity-signed-out" } }), /Use the Log in button before testing the connection/u)
 })
 

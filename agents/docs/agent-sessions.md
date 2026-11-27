@@ -189,8 +189,10 @@ the resource details panel and retains the last Conversations destination within
 mounted machine scope. A fresh machine scope resets that destination to New session.
 Reading a Session opens its history without restoring it. The restore action confirms
 before restoring and opening the Session; failures retain the confirmation for retry.
-Each archived row also offers Delete, with a hold-to-confirm button. Deletion
-removes the Session from the list; failures remain in the dialog for retry.
+Each archived row offers Delete. Its confirmation dialog initially focuses Cancel.
+Pointer users hold Delete for 1.2 seconds. Keyboard and assistive technology users
+can activate the dialog's Delete button directly. Deletion removes the Session
+from the list. Failures remain in the dialog for retry.
 Rows keep Rename and Restore in the Session context menu, without Pin/Unpin. Offline
 history remains readable, while restoration and other daemon mutations require the machine
 online. The page shows loading, empty, and retry states for list reads.
@@ -462,7 +464,9 @@ launch failures surface as detection errors rather than missing installations.
 
 The Antigravity template runs Google's native
 [Antigravity CLI ACP server](https://antigravity.google/docs/cli/acp/) with
-`` `<binary> acp` `` and `agy` as the default executable. Settings installs the
+`` `<binary> acp --process-per-session` `` and `agy` as the default executable.
+The `--process-per-session` flag enables HTTP MCP servers in `agy acp`.
+Settings installs the
 CLI from Google's official installer (`https://antigravity.google/cli/install.sh`
 on macOS and Linux, or `https://antigravity.google/cli/install.ps1` on Windows).
 Discovery checks `PATH`, `~/.local/bin` on macOS and Linux, and
@@ -473,12 +477,16 @@ terminal for interactive Google sign-in.
 The CLI uses the profile under `GEMINI_HOME`, with configuration at
 `~/.gemini/antigravity-cli/settings.json` by default. **Test Connection** uses
 existing credentials and reports authentication required when absent.
-`agy acp` can answer `session/prompt` with `end_turn` while non-daemon tool calls
-and child sessions still run. The provider wrapper keeps that turn open until
-those ACP-reported workers settle, so their approvals, live state, and input
-queue are not retired early, then completes with the foreground stop reason.
-The wait is bound to 30 minutes and ends immediately on cancellation or steering;
-daemon tool calls do not hold a turn.
+Antigravity CLI 1.5.15 and later keep `session/prompt` open natively while
+non-daemon background tasks and subagents run. Earlier CLI versions can complete
+a turn before those background tasks finish.
+
+Users can check their account quota with `/usage` in the Antigravity CLI.
+DeskFleet omits the Antigravity quota menu because Google does not support
+wrapping `agy -p` in third-party applications on consumer plans. The former
+menu used this headless mode to run `/usage` when the user opened the agent
+selector. See the [Antigravity FAQ](https://antigravity.google/docs/faq/)
+and [Additional Terms of Service, section 6](https://antigravity.google/terms).
 
 The ACP template
 runs an ACP-compatible executable directly over stdio, with `acp-agent` as its
@@ -840,6 +848,8 @@ The textarea offers completions at the cursor for `@` files and Sessions, `$`
 skills, and `/` commands at the start of a message. Selected file, Session, and
 skill identities remain associated with their text and appear as removable
 reference chips. Editing a selected token turns it back into ordinary text.
+Enter used to confirm an input method candidate leaves the draft in the
+composer. A subsequent Enter can accept a completion or send the draft.
 References and attachments share prompt serialization before the durable input
 is submitted, including on new-Session creation.
 
@@ -1139,7 +1149,7 @@ Backpressure retries retain the same frame, and closing cancels pending delivery
 | `_deskfleet/command/get` | Read the receipt/outcome after response loss |
 | `_deskfleet/session/resume`, `/stop` | Explicit provider lifecycle operations; input submission also resumes |
 | `_deskfleet/session/archive`, `/restore` | Backend management operations; reclaim/recreate generated checkouts, preserve history, and require an online daemon |
-| `_deskfleet/session/delete` | Delete local Session records and owned resources, including retained worktree refs; the archived Sessions page requires hold confirmation |
+| `_deskfleet/session/delete` | Delete local Session records and owned resources, including retained worktree refs. The archived Sessions page prompts for confirmation. |
 | `_deskfleet/session/rename` | Rename an active or archived Session through management RPC or ACP; preserve execution and record the customized title |
 
 Conversation ACP notifications, including provider Session IDs, are carried in

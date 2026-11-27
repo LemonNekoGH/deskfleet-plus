@@ -28,11 +28,13 @@ import { useSessionLabel } from "../../composables/useSessionLabel.ts"
 import { useFleetStore } from "../../stores/fleet.ts"
 import { useLayoutStore, type SessionWindowRequest } from "../../stores/layout.ts"
 import { useTerminalsStore } from "../../stores/terminals.ts"
+import { previewDefaultTitle } from "../../services/preview.ts"
 import {
   formatWebPreviewTabTitle,
   isWebPreviewSupported,
   normalizeWebPreviewUrl,
 } from "../../services/web-preview.ts"
+import ErrorNotice from "../common/ErrorNotice.vue"
 import UiButton from "../common/UiButton.vue"
 import GithubIcon from "../common/GithubIcon.vue"
 import ChangesPanel from "../details/ChangesPanel.vue"
@@ -65,6 +67,7 @@ const topRightGroupId = shallowRef<string>()
 const changesOpen = shallowRef(false)
 const desktopsOpen = shallowRef(false)
 const githubOpen = shallowRef(false)
+const terminalError = shallowRef<unknown>(null)
 const closingTerminals = new Set<string>()
 let syncing = false
 const disposables: { dispose(): void }[] = []
@@ -163,7 +166,7 @@ function addDesktopsPanel(group?: DockviewGroupPanel): void {
 }
 
 function isPreviewPanel(panelId: string): boolean {
-  return panelId.startsWith("preview:") || panelId.startsWith("mermaid-preview:")
+  return panelId.startsWith("preview:")
 }
 
 function isWebPreviewPanel(panelId: string): boolean {
@@ -189,17 +192,15 @@ function openSessionWindow(request: SessionWindowRequest): void {
   const current = api.value
   if (!current) return
   const contentRequest = structuredClone(toRaw(request))
-  const windowId = `${contentRequest.kind === "mermaid" ? "mermaid-preview" : "preview"}:${crypto.randomUUID()}`
+  const windowId = `preview:${crypto.randomUUID()}`
   const group = rightWindowGroup(current)
 
   current.addPanel({
     id: windowId,
     component: "sessionPreview",
     title: contentRequest.kind === "preview"
-      ? contentRequest.item.title || (contentRequest.item.kind === "image" ? t("agent.image") : t("agent.contentType", { type: contentRequest.item.kind }))
-      : contentRequest.kind === "resource"
-        ? resourceWindowTitle(contentRequest)
-        : t("mermaid.title"),
+      ? contentRequest.item.title || previewDefaultTitle(contentRequest.item.kind, t)
+      : resourceWindowTitle(contentRequest),
     params: { request: contentRequest },
     position: group
       ? { referenceGroup: group, direction: "within" }
@@ -365,11 +366,12 @@ function closeTab(params: IDockviewPanelHeaderProps): void {
   if (terminalId) {
     if (closingTerminals.has(terminalId)) return
     closingTerminals.add(terminalId)
+    terminalError.value = null
     void terminals.hangup(terminalId).then(() => {
       api.value?.getPanel(params.api.id)?.api.close()
       saveLayout()
     }).catch(reason => {
-      terminals.error = reason instanceof Error ? reason.message : String(reason)
+      terminalError.value = reason
     }).finally(() => { closingTerminals.delete(terminalId) })
     return
   }
@@ -403,6 +405,7 @@ function shellTitle(terminalId: string): string {
 async function openTerminalTab(group: DockviewGroupPanel, direction: "within" | "below" = "within"): Promise<void> {
   const worktreeId = sessionWorktreeId.value
   if (!worktreeId) return
+  terminalError.value = null
   try {
     const terminal = await terminals.create({ worktreeId })
     addTerminalPanel(terminal.id, shellTitle(terminal.id), group, true, direction)
@@ -411,7 +414,7 @@ async function openTerminalTab(group: DockviewGroupPanel, direction: "within" | 
     panel?.api.setActive()
     saveLayout()
   } catch (reason) {
-    terminals.error = reason instanceof Error ? reason.message : String(reason)
+    terminalError.value = reason
   }
 }
 
@@ -507,9 +510,9 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <section class="deskfleet-windows min-h-0 min-w-0 flex-1 overflow-clip" :aria-label="t('toolbar.windows')">
+  <section class="deskfleet-windows flex min-h-0 min-w-0 flex-1 flex-col overflow-clip" :aria-label="t('toolbar.windows')">
     <DockviewVue
-      class="h-full w-full"
+      class="min-h-0 w-full flex-1"
       :theme="themeLight"
       :get-tab-context-menu-items="() => []"
       @ready="onReady"
@@ -595,6 +598,11 @@ onScopeDispose(() => {
         />
       </template>
     </DockviewVue>
+    <div v-if="terminalError" class="shrink-0 border-t border-ui-border p-2">
+      <ErrorNotice :error="terminalError">
+        <UiButton type="button" size="sm" @click="terminalError = null">{{ t("common.close") }}</UiButton>
+      </ErrorNotice>
+    </div>
   </section>
 </template>
 

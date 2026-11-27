@@ -1403,11 +1403,16 @@
     "notGit": "Not a Git checkout",
     "clean": "No changes",
     "gitUnavailable": "Git inspection is available for sessions on an online local machine.",
-    "gitLive": "Updating live",
     "gitPaused": "Live updates paused",
     "gitStale": "Showing the last loaded changes.",
     "gitLoading": "Loading Git changes…",
     "refreshGit": "Refresh Git changes",
+    "changeScope": "Comparison mode",
+    "changeMode": {
+      "base": "Base branch",
+      "uncommitted": "Uncommitted"
+    },
+    "comparingTo": "vs {branch}",
     "detachedHead": "Detached HEAD",
     "noCommits": "No commits yet",
     "openDiff": "View {kind} diff for {path}",
@@ -1427,6 +1432,7 @@
     "truncatedDiff": "This diff is large. Only the first part is shown.",
     "addLineComment": "Comment on line {line}",
     "changeKind": {
+      "branch": "Branch",
       "staged": "Staged",
       "unstaged": "Unstaged",
       "untracked": "Untracked"
@@ -1450,6 +1456,7 @@
   },
   "catalog": {
     "local": "Local",
+    "machines": "Machines",
     "workspaces": "Workspaces",
     "loading": "Loading workspaces…",
     "refresh": "Refresh",
@@ -1588,12 +1595,19 @@
     "plan": "Plan",
     "steered": "Steered the turn",
     "backlog": "Queued",
+    "backlogQueued": "{n} message queued | {n} messages queued",
+    "backlogFailed": "{n} failed",
+    "backlogExpand": "Expand",
+    "backlogCollapse": "Collapse",
     "steer": "Steer now",
     "withdraw": "Withdraw",
     "retryInput": "Retry delivery",
     "uncertainInput": "Delivery could not be confirmed. Check the conversation before submitting again.",
     "permissions": "Permissions",
     "permissionRequired": "Permission required",
+    "permissionMoreOptions": "More options",
+    "permissionPrevious": "Previous permission",
+    "permissionNext": "Next permission",
     "questions": {
       "title": "Your input is needed",
       "urlTitle": "Continue in your browser",
@@ -1924,7 +1938,12 @@
     "machineNameFor": "New name for {name}",
     "removeMachineLabel": "Remove {name}",
     "removeMachineTitle": "Remove {name}?",
-    "removeMachineDescription": "Its credential for this Team is revoked and connections to this Team close. Files and history are kept for rejoining. Other Teams stay connected."
+    "removeMachineDescription": "Its credential for this Team is revoked and connections to this Team close. Files and history are kept for rejoining. Other Teams stay connected.",
+    "dangerZone": "Danger zone",
+    "deleteTeam": "Delete team",
+    "deleteTeamDescription": "Permanently delete this team, its memberships, invitations, and settings. Teams that still have machines or billing records can’t be deleted.",
+    "deleteTeamTitle": "Delete {team}?",
+    "deleteTeamConfirmDescription": "Everyone loses access immediately. This cannot be undone."
   },
   "addMachine": {
     "title": "Add a machine to {team}",
@@ -1984,7 +2003,7 @@
     "openResource": "Open", "previewUnavailableLocal": "Preview is unavailable for this file. You can open it in another application.",
     "showInFinder": "Show in Finder", "showInExplorer": "Show in File Explorer", "showInFileManager": "Show in File Manager",
     "previewUnavailable": "Preview is unavailable for this file. You can download it.", "downloadResource": "Download",
-    "previewHtml": "Preview", "viewSource": "Source",
+    "preview": "Preview", "viewSource": "Source",
     "csvEmpty": "This CSV file is empty.",
     "csvPreviewLimit": "Showing the first {rows} rows and {columns} columns.",
     "resourceUnavailable": "This resource is unavailable. Connect to its machine and try again.",
@@ -2407,6 +2426,7 @@
     }
   },
   "sidebar": {
+    "chat": "Chat",
     "filterLabel": "Filter sessions",
     "filterAll": "All",
     "filterUnread": "Unread",

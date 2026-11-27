@@ -14,7 +14,7 @@ import BottomSheet from "./components/common/BottomSheet.vue"
 import MobileWindowManager from "./components/chrome/MobileWindowManager.vue"
 import WindowManager from "./components/chrome/WindowManager.vue"
 import AppSidebar from "./components/sidebar/AppSidebar.vue"
-import { listenMermaidLocate, locateMermaidInMainView, useLayoutStore } from "./stores/layout.ts"
+import { useLayoutStore } from "./stores/layout.ts"
 import { listenPreviewWindowMessages, locatePreviewInMainView, usePreviewActions } from "./stores/previews.ts"
 import { useFleetStore } from "./stores/fleet.ts"
 import { useTerminalsStore } from "./stores/terminals.ts"
@@ -59,17 +59,12 @@ const unsubscribePreviewMessages = listenPreviewWindowMessages((content, source)
   window.focus()
   void locatePreviewInMainView(content, source)
 }, openPreviewFromAction)
-const unsubscribeMermaidLocate = listenMermaidLocate((code, source) => {
-  window.focus()
-  void locateMermaidInMainView(code, source)
-})
 onMounted(refresh)
 useEventListener(window, "focus", refresh)
 onBeforeUnmount(() => {
   layout.closeCompactPanel()
   unsubscribeSettings()
   unsubscribePreviewMessages()
-  unsubscribeMermaidLocate()
 })
 </script>
 
@@ -80,7 +75,7 @@ onBeforeUnmount(() => {
     <MobileWindowManager v-else-if="compact && route.name === 'session'" :key="`mobile:${route.params.sessionId}`" :session-id="String(route.params.sessionId)" />
     <AppMainWindow v-else />
     <BottomSheet v-if="compact && !route.meta.fullWindow && !standaloneSession" :open="sidebarOpen" :title="t('catalog.workspaces')" background="sidebar" @close="layout.closeCompactPanel()">
-      <AppSidebar class="h-full" />
+      <AppSidebar />
     </BottomSheet>
   </div>
 </template>

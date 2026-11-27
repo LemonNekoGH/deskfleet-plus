@@ -48,6 +48,16 @@ test("only profile preparation receives API credentials in the iOS build", () =>
   assert.doesNotMatch(diagnostics, /App\.xcarchive|\.p12|\.p8|mobileprovision/)
 })
 
+test("the iOS simulator and archive jobs share the pinned Xcode toolchain", () => {
+  const archive = job(workflow("build"), "ios")
+  const developerDir = archive.match(/DEVELOPER_DIR: (.+)/)?.[1]
+  assert.match(developerDir ?? "", /^\/Applications\/Xcode_27\.\d+(?:\.\d+)?\.app\/Contents\/Developer$/)
+  for (const source of [archive, job(workflow("test"), "ios")]) {
+    assert.match(source, /^    runs-on: xcode-27$/m)
+    assert.equal(source.match(/DEVELOPER_DIR: (.+)/)?.[1], developerDir)
+  }
+})
+
 test("draft GitHub release consumes mobile artifacts without store publication jobs", () => {
   const publishYaml = workflow("publish")
   const release = job(publishYaml, "release")
