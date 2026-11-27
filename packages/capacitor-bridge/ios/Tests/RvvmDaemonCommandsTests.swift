@@ -120,7 +120,8 @@ final class RvvmDaemonCommandsTests: XCTestCase {
     func testDaemonProbeCommandAndOutputParsing() {
         let cmd = RvvmDaemonCommands.daemonProbeCommand(logOffset: 128)
         XCTAssertTrue(cmd.contains(RvvmDaemonCommands.daemonDiscoveryPath))
-        XCTAssertTrue(cmd.contains("systemctl is-active --quiet 'deskfleet-daemon.service'"))
+        XCTAssertTrue(cmd.contains("systemctl is-active 'deskfleet-daemon.service'"))
+        XCTAssertTrue(cmd.contains(#"[ "$svc_state" = "activating" ]"#))
         XCTAssertTrue(cmd.contains("tail -c +$((128 + 1))"))
 
         let waiting = RvvmDaemonCommands.parseDaemonProbeOutput("STATE alive waiting 64\nbooting...\n")
@@ -188,6 +189,10 @@ final class RvvmDaemonCommandsTests: XCTestCase {
 
     func testEnsureDaemonRunningCommandConfiguresIpv4FirstAndOptionalProxy() {
         let plain = RvvmDaemonCommands.ensureDaemonRunningCommand()
+        XCTAssertTrue(plain.contains("After=network.target"))
+        XCTAssertFalse(plain.contains("After=network-online.target"))
+        XCTAssertTrue(plain.contains("systemctl start --no-block 'deskfleet-daemon.service'"))
+        XCTAssertTrue(plain.contains("rm -f '/root/.deskfleet/daemon.json'"))
         XCTAssertTrue(plain.contains("export GODEBUG='asyncpreemptoff=1'"))
         XCTAssertTrue(plain.contains("NODE_OPTIONS='--dns-result-order=ipv4first'"))
         XCTAssertFalse(plain.contains("--jitless"))

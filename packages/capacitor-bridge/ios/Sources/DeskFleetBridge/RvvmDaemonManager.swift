@@ -174,7 +174,7 @@ internal final class RvvmDaemonManager {
             ]
         }
         do {
-            let output = try execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 15)
+            let output = try execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 30)
             let parsed = try RvvmDaemonCommands.extractJsonObject(from: output)
             if parsed["registrations"] != nil {
                 return parsed
@@ -631,8 +631,16 @@ internal final class RvvmDaemonManager {
     }
 
     private func isGuestDaemonReady() -> Bool {
+        // Fast pure-shell preflight before spawning Node 24 (`deskfleet-daemon status`), which can
+        // take 15-25s under RVVM cold boot and otherwise clogs the single-threaded UART 1 exec loop.
+        guard let probeOut = try? execInGuest(RvvmDaemonCommands.daemonProbeCommand(logOffset: 0), timeoutSeconds: 10),
+              let probe = RvvmDaemonCommands.parseDaemonProbeOutput(probeOut),
+              probe.alive,
+              probe.discoveryReady else {
+            return false
+        }
         do {
-            let output = try execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 15)
+            let output = try execInGuest(RvvmDaemonCommands.statusCommand(), timeoutSeconds: 45)
             let parsed = try RvvmDaemonCommands.extractJsonObject(from: output)
             return parsed["registrations"] != nil
         } catch {
@@ -659,13 +667,14 @@ internal final class RvvmDaemonManager {
         let screenBridge = screenBridgeProvider()
         _ = try execInGuest(
             RvvmDaemonCommands.ensureDaemonRunningCommand(proxy: proxy, screenBridge: screenBridge),
-            timeoutSeconds: 20
+            timeoutSeconds: 45
         )
-        try waitForGuestDaemonReady(initialLogOffset: initialOffset, timeoutSeconds: 60)
+        try waitForGuestDaemonReady(initialLogOffset: initialOffset, timeoutSeconds: 120)
     }
 
     private func waitForGuestDaemonReady(initialLogOffset: UInt64, timeoutSeconds: TimeInterval) throws {
         var logOffset = initialLogOffset
+        let startGraceDeadline = Date().addingTimeInterval(5)
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if let probeOut = try? execInGuest(RvvmDaemonCommands.daemonProbeCommand(logOffset: logOffset), timeoutSeconds: 10),
@@ -675,7 +684,7 @@ internal final class RvvmDaemonManager {
                 }
                 logOffset = probe.nextOffset
 
-                if !probe.alive {
+                if !probe.alive && Date() >= startGraceDeadline {
                     let tail = ((try? execInGuest(RvvmDaemonCommands.daemonLogTailCommand(), timeoutSeconds: 10)) ?? "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     let msg = tail.isEmpty
@@ -689,7 +698,7 @@ internal final class RvvmDaemonManager {
                     )
                 }
 
-                if probe.discoveryReady && isGuestDaemonReady() {
+                if probe.alive && probe.discoveryReady && isGuestDaemonReady() {
                     emitSuccess("Local deskfleet-daemon is ready.")
                     return
                 }

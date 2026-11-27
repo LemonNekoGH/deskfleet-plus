@@ -226,6 +226,7 @@ internal enum RvvmDaemonCommands {
         let qEnv = shellQuote(daemonEnvFile)
         let qService = shellQuote(daemonServiceName)
         let qPid = shellQuote(daemonPidFile)
+        let qDiscovery = shellQuote(daemonDiscoveryPath)
         let qDaemon = shellQuote(daemonBinaryPath)
         let qLog = shellQuote(daemonLogFile)
         return """
@@ -239,7 +240,7 @@ internal enum RvvmDaemonCommands {
           cat <<'DESKFLEET_SERVICE_EOF' >/run/systemd/system/\(daemonServiceName)
         [Unit]
         Description=DeskFleet Machine Daemon
-        After=network-online.target
+        After=network.target
 
         [Service]
         Type=simple
@@ -257,13 +258,15 @@ internal enum RvvmDaemonCommands {
           if systemctl is-active --quiet \(qService) || { [ -f \(qPid) ] && kill -0 "$(cat \(qPid) 2>/dev/null)" 2>/dev/null; }; then
             exit 0
           fi
-          systemctl start \(qService)
+          rm -f \(qDiscovery)
+          systemctl start --no-block \(qService)
           exit 0
         fi
         . \(qEnv)
         if [ -f \(qPid) ] && kill -0 "$(cat \(qPid) 2>/dev/null)" 2>/dev/null; then
           exit 0
         fi
+        rm -f \(qDiscovery)
         nohup \(qDaemon) </dev/null >>\(qLog) 2>&1 3>&- &
         echo $! >\(qPid)
         """
@@ -332,8 +335,11 @@ internal enum RvvmDaemonCommands {
             alive=alive
           fi
         fi
-        if [ "$alive" = "dead" ] && command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet \(qService); then
-          alive=alive
+        if [ "$alive" = "dead" ] && command -v systemctl >/dev/null 2>&1; then
+          svc_state=$(systemctl is-active \(qService) 2>/dev/null || true)
+          if [ "$svc_state" = "active" ] || [ "$svc_state" = "activating" ] || [ "$svc_state" = "reloading" ]; then
+            alive=alive
+          fi
         fi
         ready=waiting
         if [ -s \(qDiscovery) ]; then
